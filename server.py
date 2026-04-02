@@ -394,9 +394,12 @@ async def export_clips(
         )
         
         # ファイル名生成
-        start_str = f"{int(start // 60):02d}-{int(start % 60):02d}"
-        end_str = f"{int(end // 60):02d}-{int(end % 60):02d}"
-        output_filename = f"{base_name}_{start_str}_{end_str}_{video_bitrate}kbps.mp4"
+        import datetime
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y%m%d_%H%M%S")
+        start_sec = int(start)
+        end_sec = int(end)
+        output_filename = f"{date_str}_{start_sec:02d}-{end_sec:02d}.mp4"
         output_path = os.path.join(output_dir, output_filename)
         
         # FFmpegコマンド (軽量化・指定ビットレートに準拠するための最適化)
@@ -405,8 +408,13 @@ async def export_clips(
             "-ss", str(start),           # シーク（入力前に置くことで高速化）
             "-i", file_path,
             "-t", str(duration_sec),      # 長さ
-            "-c:v", "libx264",           # H.264エンコード
-            "-preset", "slow",           # エンコード速度 (遅くすることで圧縮率UP)
+            
+            # X(Twitter)最適化用・高圧縮のエンコード設定
+            "-c:v", "libx264",
+            "-profile:v", "high",        # 高画質プロファイル
+            "-level", "4.2",             # 高品質維持レベル
+            "-preset", "veryslow",       # 極限まで圧縮(処理は遅くなるがファイルサイズと画質の比率が最も良い)
+            "-pix_fmt", "yuv420p",       # X(Twitter)などWeb標準互換に必須
             
             # ビットレートを厳格に制限する（Twitter等の軽量化目的のため）
             "-b:v", f"{video_bitrate}k",
