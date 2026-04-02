@@ -396,10 +396,10 @@ async def export_clips(
         # ファイル名生成
         start_str = f"{int(start // 60):02d}-{int(start % 60):02d}"
         end_str = f"{int(end // 60):02d}-{int(end % 60):02d}"
-        output_filename = f"{base_name}_{start_str}_{end_str}_crf28_{fps}fps.mp4"
+        output_filename = f"{base_name}_{start_str}_{end_str}_{video_bitrate}kbps.mp4"
         output_path = os.path.join(output_dir, output_filename)
         
-        # FFmpegコマンド (高圧縮・画質維持のための最適化)
+        # FFmpegコマンド (軽量化・指定ビットレートに準拠するための最適化)
         cmd = [
             FFMPEG, "-y",
             "-ss", str(start),           # シーク（入力前に置くことで高速化）
@@ -407,7 +407,12 @@ async def export_clips(
             "-t", str(duration_sec),      # 長さ
             "-c:v", "libx264",           # H.264エンコード
             "-preset", "slow",           # エンコード速度 (遅くすることで圧縮率UP)
-            "-crf", "28",                # 品質 (23→28に変更して画質を保ちつつ容量を削減)
+            
+            # ビットレートを厳格に制限する（Twitter等の軽量化目的のため）
+            "-b:v", f"{video_bitrate}k",
+            "-maxrate", f"{video_bitrate}k",
+            "-bufsize", f"{video_bitrate*2}k",
+
             "-r", str(fps),              # FPS
             "-c:a", "aac",               # 音声コーデック
             "-b:a", f"{audio_bitrate}k", # 音声ビットレート
