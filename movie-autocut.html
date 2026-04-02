@@ -758,8 +758,8 @@
           <select id="bitrateInput" class="select" style="width:180px;padding:8px">
             <option value="1000">1000kbps (極小)</option>
             <option value="1500">1500kbps (標準)</option>
-            <option value="2000" selected>2000kbps (軽量・推奨)</option>
-            <option value="2500">2500kbps (高画質)</option>
+            <option value="2000">2000kbps (軽量)</option>
+            <option value="2500" selected>2500kbps (高画質・推奨)</option>
             <option value="4500">4500kbps (超高画質)</option>
           </select>
         </div>
@@ -803,9 +803,7 @@
     <p class="help-text" style="margin-bottom:15px">💡 大容量動画を圧縮して音声解析を高速化します。圧縮後のファイルを使用することで、3GB以上の動画でもスムーズに処理できます。</p>
 
     <div style="display:flex;gap:15px;align-items:center;flex-wrap:wrap;margin-bottom:20px">
-      <label class="btn btn-primary" style="margin:0">📂 圧縮する動画を選択<input type="file" id="compressFileInput"
-          accept="video/*" style="display:none;"></label>
-      <span id="compressFileDisplay" style="color:#9ca3af;font-size:0.9rem">ファイル未選択</span>
+      <span style="color:#d1d5db;font-size:0.95rem">🎯 上部の「動画ファイル」で読み込んでいる動画の範囲を指定して圧縮・出力します。</span>
     </div>
     <!-- 時間範囲選択 -->
     <div style="margin-bottom:20px;padding:15px;background:rgba(0,0,0,0.3);border-radius:8px;">
@@ -865,31 +863,37 @@
           <select id="compressResolution" class="select">
             <option value="original">元の解像度</option>
             <option value="1080">1080p</option>
-            <option value="720" selected>720p (推奨)</option>
+            <option value="720" selected>720p</option>
             <option value="480">480p</option>
             <option value="360">360p</option>
           </select>
         </div>
         <div class="setting-item">
-          <label>品質 (CRF)</label>
-          <input type="number" id="compressCRF" value="23" min="18" max="35" class="input">
-          <p class="help-text">18=最高品質(大容量) / 28=推奨 / 35=低品質(小容量)</p>
+          <label>映像ビットレート</label>
+          <select id="compressBitrate" class="select">
+            <option value="1000">1000kbps (極小)</option>
+            <option value="1500">1500kbps (標準)</option>
+            <option value="2000">2000kbps (軽量)</option>
+            <option value="2500" selected>2500kbps (高画質・推奨)</option>
+            <option value="4500">4500kbps (超高画質)</option>
+          </select>
         </div>
       </div>
 
       <div class="settings-row">
         <div class="setting-item">
-          <label>ビットレート (kbps)</label>
-          <input type="number" id="compressBitrate" value="2500" min="500" max="10000" step="100" class="input">
-          <p class="help-text">音声解析用には1000-2000を推奨</p>
+          <label>音声ビットレート</label>
+          <select id="compressAudioBitrate" class="select">
+            <option value="64">64kbps</option>
+            <option value="100" selected>100kbps</option>
+            <option value="128">128kbps (標準)</option>
+            <option value="192">192kbps (高音質)</option>
+          </select>
         </div>
-        <div class="setting-item">
-          <label>音声ビットレート (kbps)</label>
-          <input type="number" id="compressAudioBitrate" value="128" min="64" max="256" step="32" class="input">
-        </div>
+        <div class="setting-item"></div>
       </div>
 
-      <button id="startCompressBtn" class="btn btn-process" style="margin-top:15px">🗜️ 圧縮開始</button>
+      <button id="startCompressBtn" class="btn btn-process" style="margin-top:15px">🗜️ 指定範囲を圧縮出力</button>
     </div>
 
     <div id="compressProgressContainer" class="progress-container">

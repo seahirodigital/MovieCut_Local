@@ -471,13 +471,12 @@ async def export_clips(
 @app.post("/api/compress")
 async def compress_video(
     file_path: str = Form(...),
-    output_dir: str = Form(""),
+    output_dir: str = Form(...),
     resolution: str = Form("720"),
-    crf: int = Form(23),
     video_bitrate: int = Form(2500),
-    audio_bitrate: int = Form(128),
+    audio_bitrate: int = Form(100),
     start_time: float = Form(0),
-    end_time: float = Form(-1),
+    end_time: float = Form(0)
 ):
     """
     動画圧縮 API
@@ -514,17 +513,19 @@ async def compress_video(
         # 偶数に揃える
         vf_filters.append(f"scale=-2:{target_height}")
     
-    # FFmpegコマンド構築
+    # FFmpegコマンド構築 (X/Twitter互換・超高圧縮設定)
     cmd = [
         FFMPEG, "-y",
         "-ss", str(start_time),
         "-i", file_path,
         "-t", str(compress_duration),
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", str(crf),
+        "-profile:v", "high",
+        "-level", "4.2",
+        "-preset", "veryslow",
+        "-pix_fmt", "yuv420p",
         "-b:v", f"{video_bitrate}k",
-        "-maxrate", f"{int(video_bitrate * 1.5)}k",
+        "-maxrate", f"{video_bitrate}k",
         "-bufsize", f"{video_bitrate * 2}k",
         "-c:a", "aac",
         "-b:a", f"{audio_bitrate}k",

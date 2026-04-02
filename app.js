@@ -535,7 +535,6 @@ async function handleCompress() {
   }
 
   const resolution = document.getElementById('compressResolution').value;
-  const crf = parseInt(document.getElementById('compressCRF').value);
   const bitrate = parseInt(document.getElementById('compressBitrate').value);
   const audioBitrate = parseInt(document.getElementById('compressAudioBitrate').value);
   const outputDir = document.getElementById('outputDirInput').value.trim() || '';
@@ -550,14 +549,13 @@ async function handleCompress() {
   progressContainer.style.display = 'block';
   updateCompressProgress('圧縮準備中...', 0);
 
-  addMessage(`🗜️ FFmpegで圧縮開始 (${formatTime(startTime)} - ${formatTime(endTime)}, ${resolution}p, CRF=${crf})...`, 'info');
+  addMessage(`🗜️ FFmpegで圧縮開始 (${formatTime(startTime)} - ${formatTime(endTime)}, ${resolution}p, ${bitrate}kbps)...`, 'info');
 
   try {
     const params = new URLSearchParams({
       file_path: currentFilePath,
       output_dir: outputDir,
       resolution: resolution,
-      crf: crf,
       video_bitrate: bitrate,
       audio_bitrate: audioBitrate,
       start_time: startTime,
