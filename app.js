@@ -34,6 +34,9 @@ let hoveredClipIndex = -1;
 let waveformAmplitudeScale = 1.0;
 let detectedSpikes = [];
 let playbackSpeed = 1.0;
+let clipSliderSyncFrame = null;
+let clipPlaybackMonitor = null;
+let currentPlaybackClipIndex = -1;
 
 // 圧縮機能用
 let compressVideoDuration = 0;
@@ -115,6 +118,44 @@ setInterval(() => {
 }, 15000);
 
 
+async function openOutputDirectoryDialog() {
+  const outputDirInput = document.getElementById('outputDirInput');
+  if (!outputDirInput) return;
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/dialog/open-directory`, { cache: 'no-store' });
+    const data = await resp.json();
+
+    if (data.success && data.path) {
+      outputDirInput.value = data.path;
+      addMessage(`保存先: ${data.path}`, 'success');
+      return;
+    }
+
+    if (data.error) {
+      addMessage(`保存先フォルダを開けませんでした: ${data.error}`, 'warning');
+    }
+  } catch (e) {
+    addMessage('保存先フォルダを開けませんでした。直接パスを入力するか、参照ボタンを再度押してください', 'warning');
+  }
+}
+
+function toggleAutoDetectSettings(forceOpen) {
+  const autoDetectSection = document.getElementById('autoDetectSection');
+  const settingsToggleBtn = document.getElementById('settingsToggleBtn');
+  if (!autoDetectSection || !settingsToggleBtn) return;
+
+  const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : autoDetectSection.hidden;
+  autoDetectSection.hidden = !shouldOpen;
+  settingsToggleBtn.classList.toggle('active', shouldOpen);
+  settingsToggleBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+
+  if (shouldOpen) {
+    autoDetectSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+
 // ===== 初期化 =====
 function init() {
   videoElement = document.getElementById('videoPlayer');
@@ -124,6 +165,14 @@ function init() {
   playbackSpeed = 1.0;
   if (videoElement) {
     videoElement.playbackRate = playbackSpeed;
+    videoElement.addEventListener('timeupdate', syncClipPreviewSliders);
+    videoElement.addEventListener('seeked', syncClipPreviewSliders);
+    videoElement.addEventListener('loadedmetadata', syncClipPreviewSliders);
+    videoElement.addEventListener('play', startClipPreviewSyncLoop);
+    videoElement.addEventListener('pause', stopClipPreviewSyncLoop);
+    videoElement.addEventListener('ended', stopClipPreviewSyncLoop);
+    videoElement.addEventListener('pause', clearCurrentPlaybackClip);
+    videoElement.addEventListener('ended', clearCurrentPlaybackClip);
   }
   updatePlaybackSpeedDisplay();
 
@@ -133,6 +182,9 @@ function init() {
   // ファイル選択: ダブルクリック→エクスプローラーを開く（シングルクリックは手入力用）
   const filePathInput = document.getElementById('filePathInput');
   const outputDirInput = document.getElementById('outputDirInput');
+  const browseOutputDirBtn = document.getElementById('browseOutputDirBtn');
+  const settingsToggleBtn = document.getElementById('settingsToggleBtn');
+  const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 
   filePathInput.title = 'ダブルクリックでエクスプローラーを開く';
   outputDirInput.title = 'ダブルクリックでフォルダを選択';
@@ -150,16 +202,16 @@ function init() {
     }
   });
 
-  outputDirInput.addEventListener('dblclick', async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/dialog/open-directory`);
-      const data = await resp.json();
-      if (data.success && data.path) {
-        outputDirInput.value = data.path;
-        addMessage(`保存先: ${data.path}`, 'success');
-      }
-    } catch(e) {}
-  });
+  outputDirInput.addEventListener('dblclick', openOutputDirectoryDialog);
+  if (browseOutputDirBtn) {
+    browseOutputDirBtn.addEventListener('click', openOutputDirectoryDialog);
+  }
+  if (settingsToggleBtn) {
+    settingsToggleBtn.addEventListener('click', () => toggleAutoDetectSettings());
+  }
+  if (closeSettingsBtn) {
+    closeSettingsBtn.addEventListener('click', () => toggleAutoDetectSettings(false));
+  }
 
   // ファイル読み込みボタン
   document.getElementById('loadFileBtn').addEventListener('click', handleFileLoad);
@@ -1011,6 +1063,8 @@ function renderClips() {
   const viewDuration = duration / zoomLevel;
   const viewStart = scrollOffset;
   const viewEnd = viewStart + viewDuration;
+  const currentTime = Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : 0;
+  const activePlaybackIndex = getActivePlaybackClipIndex(currentTime);
 
   clips.forEach((clip, index) => {
     if (clip.end < viewStart || clip.start > viewEnd) return;
@@ -1024,6 +1078,7 @@ function renderClips() {
     marker.className = 'segment-marker';
     if (index === selectedClipIndex) marker.classList.add('selected');
     if (checkedClips.has(index)) marker.classList.add('checked');
+    if (index === activePlaybackIndex) marker.classList.add('playback-active');
     marker.style.left = startPercent + '%';
     marker.style.width = widthPercent + '%';
     marker.dataset.index = index;
@@ -1087,6 +1142,103 @@ function handleResizeMouseDown(e) {
   e.preventDefault();
 }
 
+function getClipPreviewTime(clip, currentTime) {
+  return Math.min(clip.end, Math.max(clip.start, currentTime));
+}
+
+function getActivePlaybackClipIndex(currentTime) {
+  if (currentPlaybackClipIndex >= 0 && clips[currentPlaybackClipIndex]) {
+    return currentPlaybackClipIndex;
+  }
+
+  if (videoElement && !videoElement.paused) {
+    return clips.findIndex((clip) => currentTime >= clip.start && currentTime <= clip.end);
+  }
+
+  return -1;
+}
+
+function updateClipPreviewSliderFill(slider) {
+  const min = parseFloat(slider.min);
+  const max = parseFloat(slider.max);
+  const value = parseFloat(slider.value);
+  const progress = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  slider.style.setProperty('--clip-progress', `${progress}%`);
+}
+
+function syncClipPreviewSliders() {
+  const clipList = document.getElementById('clipList');
+  if (!clipList) return;
+
+  const currentTime = videoElement && Number.isFinite(videoElement.currentTime)
+    ? videoElement.currentTime
+    : 0;
+  const activePlaybackIndex = getActivePlaybackClipIndex(currentTime);
+
+  clipList.querySelectorAll('.clip-item').forEach((item) => {
+    const index = parseInt(item.dataset.index, 10);
+    const clip = clips[index];
+    if (!clip) return;
+
+    const slider = item.querySelector('.clip-preview-slider');
+    const currentLabel = item.querySelector('.clip-current-time');
+    const previewTime = getClipPreviewTime(clip, currentTime);
+    const isActive = index === activePlaybackIndex;
+
+    item.classList.toggle('selected', index === selectedClipIndex);
+    item.classList.toggle('checked', checkedClips.has(index));
+    item.classList.toggle('playback-active', isActive);
+
+    if (slider && document.activeElement !== slider) {
+      slider.value = previewTime;
+    }
+    if (slider) {
+      updateClipPreviewSliderFill(slider);
+    }
+    if (currentLabel) {
+      currentLabel.textContent = formatTime(previewTime);
+    }
+  });
+}
+
+function startClipPreviewSyncLoop() {
+  stopClipPreviewSyncLoop();
+
+  const step = () => {
+    syncClipPreviewSliders();
+    if (!videoElement || videoElement.paused || videoElement.ended) {
+      clipSliderSyncFrame = null;
+      return;
+    }
+    clipSliderSyncFrame = requestAnimationFrame(step);
+  };
+
+  clipSliderSyncFrame = requestAnimationFrame(step);
+}
+
+function stopClipPreviewSyncLoop() {
+  if (clipSliderSyncFrame !== null) {
+    cancelAnimationFrame(clipSliderSyncFrame);
+    clipSliderSyncFrame = null;
+  }
+  syncClipPreviewSliders();
+}
+
+function clearClipPlaybackMonitor() {
+  if (clipPlaybackMonitor) {
+    clearInterval(clipPlaybackMonitor);
+    clipPlaybackMonitor = null;
+  }
+  currentPlaybackClipIndex = -1;
+}
+
+function clearCurrentPlaybackClip() {
+  if (currentPlaybackClipIndex === -1) return;
+  currentPlaybackClipIndex = -1;
+  renderClips();
+  syncClipPreviewSliders();
+}
+
 function updateOverviewPopup() {
   if (!videoElement || !videoElement.duration) return;
   const thumb = document.getElementById('overviewThumb');
@@ -1108,6 +1260,8 @@ function updateClipList() {
   clips.forEach((clip, index) => {
     const item = document.createElement('div');
     item.className = 'clip-item';
+    item.dataset.index = index;
+    if (index === selectedClipIndex) item.classList.add('selected');
     if (checkedClips.has(index)) item.classList.add('checked');
 
     const checkbox = document.createElement('input');
@@ -1115,27 +1269,77 @@ function updateClipList() {
     checkbox.className = 'clip-checkbox';
     checkbox.checked = checkedClips.has(index);
 
-    const infoDiv = document.createElement('div');
-    infoDiv.className = 'clip-item-info';
-    infoDiv.innerHTML = '<strong>クリップ ' + (index + 1) + '</strong><br><span style="color:#10b981;font-size:0.85rem">' + formatTime(clip.start) + ' → ' + formatTime(clip.end) + ' (' + formatTime(clip.end - clip.start) + ')</span>';
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'clip-item-title';
+    titleDiv.innerHTML = '<strong class="clip-item-name">クリップ ' + (index + 1) + '</strong><span class="clip-item-range">' + formatTime(clip.start) + ' → ' + formatTime(clip.end) + '</span>';
+
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'clip-item-meta';
+    metaDiv.innerHTML = '<span class="clip-item-duration">' + formatTime(clip.end - clip.start) + '</span>';
 
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'clip-item-actions';
-    actionsDiv.innerHTML = '<button class="btn-small" style="background:#8b5cf6;color:white" onclick="playClip(' + index + ')">▶️</button><button class="btn-small" style="background:#ef4444;color:white" onclick="deleteSingleClip(' + index + ')">🗑️</button>';
+    actionsDiv.innerHTML = '<button class="btn-small" style="background:#8b5cf6;color:white" title="このクリップを再生" onclick="playClip(' + index + ')">▶</button><button class="btn-small" style="background:#ef4444;color:white" title="このクリップを削除" onclick="deleteSingleClip(' + index + ')">✕</button>';
+
+    const sliderWrap = document.createElement('div');
+    sliderWrap.className = 'clip-slider-wrap';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'clip-preview-slider';
+    slider.min = clip.start;
+    slider.max = clip.end;
+    slider.step = '0.05';
+    slider.value = getClipPreviewTime(clip, videoElement ? videoElement.currentTime : clip.start);
+    slider.dataset.index = index;
+
+    const sliderStatus = document.createElement('div');
+    sliderStatus.className = 'clip-slider-status';
+    sliderStatus.innerHTML = '<span>' + formatTime(clip.start) + '</span><span class="clip-current-time">' + formatTime(parseFloat(slider.value)) + '</span><span>' + formatTime(clip.end) + '</span>';
+
+    updateClipPreviewSliderFill(slider);
+
+    slider.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    slider.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      selectedClipIndex = index;
+      renderClips();
+      syncClipPreviewSliders();
+    });
+    slider.addEventListener('input', (e) => {
+      e.stopPropagation();
+      selectedClipIndex = index;
+      clearClipPlaybackMonitor();
+      if (videoElement) {
+        videoElement.currentTime = parseFloat(e.target.value);
+      }
+      renderClips();
+      updateClipPreviewSliderFill(slider);
+      syncClipPreviewSliders();
+    });
+
+    sliderWrap.appendChild(slider);
+    sliderWrap.appendChild(sliderStatus);
 
     item.appendChild(checkbox);
-    item.appendChild(infoDiv);
+    item.appendChild(titleDiv);
+    item.appendChild(metaDiv);
     item.appendChild(actionsDiv);
+    item.appendChild(sliderWrap);
 
     item.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('btn-small')) {
+      if (!e.target.closest('.btn-small') && !e.target.closest('.clip-preview-slider')) {
         checkedClips.has(index) ? checkedClips.delete(index) : checkedClips.add(index);
+        selectedClipIndex = index;
         renderClips();
         updateClipList();
       }
     });
     clipList.appendChild(item);
   });
+  syncClipPreviewSliders();
 }
 
 function deleteSingleClip(index) {
@@ -1157,12 +1361,24 @@ function deleteSingleClip(index) {
 
 function playClip(index) {
   if (!videoElement || !clips[index]) return;
+  clearClipPlaybackMonitor();
+  currentPlaybackClipIndex = index;
+  selectedClipIndex = index;
   videoElement.currentTime = clips[index].start;
+  renderClips();
+  syncClipPreviewSliders();
   videoElement.play();
-  const checkTime = setInterval(() => {
-    if (videoElement.currentTime >= clips[index].end) {
-      videoElement.pause();
-      clearInterval(checkTime);
+  clipPlaybackMonitor = setInterval(() => {
+    if (!clips[index] || videoElement.paused || videoElement.currentTime >= clips[index].end) {
+      if (clips[index] && videoElement.currentTime >= clips[index].end) {
+        currentPlaybackClipIndex = -1;
+        videoElement.pause();
+        renderClips();
+        syncClipPreviewSliders();
+      }
+      clearInterval(clipPlaybackMonitor);
+      clipPlaybackMonitor = null;
+      return;
     }
   }, 100);
   addMessage('クリップ ' + (index + 1) + ' を再生中', 'info');

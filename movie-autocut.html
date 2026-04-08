@@ -19,16 +19,97 @@
       background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
       color: #fff;
       min-height: 100vh;
-      padding: 20px
+      padding: 14px
     }
 
     .container {
-      max-width: 1400px;
+      width: min(90vw, 2400px);
+      max-width: none;
       margin: 0 auto
     }
 
     .header {
       margin-bottom: 30px
+    }
+
+    .top-control-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      align-items: stretch;
+      margin-bottom: 16px
+    }
+
+    .top-control-card {
+      background: rgba(30, 41, 59, 0.55);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 12px;
+      padding: 18px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start
+    }
+
+    .top-input-row {
+      display: flex;
+      align-items: center;
+      gap: 10px
+    }
+
+    .top-input-row .input {
+      flex: 1;
+      min-width: 0
+    }
+
+    .top-input-row .btn {
+      margin: 0;
+      white-space: nowrap
+    }
+
+    .top-action-card {
+      justify-content: space-between
+    }
+
+    .top-analyze-btn {
+      width: 100%;
+      min-height: 58px;
+      margin: 0 !important;
+      display: flex;
+      align-items: center;
+      justify-content: center
+    }
+
+    .top-progress {
+      margin-top: 0;
+      margin-bottom: 20px
+    }
+
+    .settings-fab {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      width: 54px;
+      height: 54px;
+      border: none;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+      color: #fff;
+      font-size: 1.5rem;
+      cursor: pointer;
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.45);
+      z-index: 300;
+      transition: transform 0.2s ease, box-shadow 0.2s ease
+    }
+
+    .settings-fab:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 18px 34px rgba(15, 23, 42, 0.52)
+    }
+
+    .settings-fab.active {
+      box-shadow: 0 0 0 3px rgba(192, 132, 252, 0.35), 0 18px 34px rgba(15, 23, 42, 0.52)
     }
 
     .title {
@@ -58,6 +139,36 @@
       font-size: 1.5rem;
       margin-bottom: 20px;
       color: #a78bfa
+    }
+
+    .settings-panel {
+      scroll-margin-top: 90px
+    }
+
+    .settings-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px
+    }
+
+    .settings-panel-header .section-title {
+      margin-bottom: 0
+    }
+
+    .settings-close-btn {
+      padding: 10px 16px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.7);
+      color: #e5e7eb;
+      cursor: pointer;
+      font-weight: 600
+    }
+
+    .settings-close-btn:hover {
+      background: rgba(30, 41, 59, 0.9)
     }
 
     .button-group {
@@ -133,7 +244,9 @@
       background: #000;
       border-radius: 8px;
       overflow: hidden;
-      aspect-ratio: 16/9
+      aspect-ratio: 16/9;
+      width: 50%;
+      margin: 0 auto 14px
     }
 
     video {
@@ -387,8 +500,8 @@
       position: absolute;
       top: 0;
       height: 80px;
-      background: rgba(16, 185, 129, 0.4);
-      border: 2px solid rgba(16, 185, 129, 0.8);
+      background: rgba(203, 213, 225, 0.22);
+      border: 2px solid rgba(203, 213, 225, 0.55);
       cursor: move;
       transition: background 0.2s;
       border-radius: 4px;
@@ -396,19 +509,23 @@
     }
 
     .segment-marker:hover {
-      background: rgba(16, 185, 129, 0.6);
-      border-color: #10b981
+      background: rgba(226, 232, 240, 0.3);
+      border-color: rgba(226, 232, 240, 0.75)
     }
 
     .segment-marker.selected {
-      background: rgba(16, 185, 129, 0.7);
-      border-color: #22c55e;
-      box-shadow: 0 0 10px rgba(16, 185, 129, 0.5)
+      box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3)
     }
 
     .segment-marker.checked {
-      background: rgba(239, 68, 68, 0.5);
-      border-color: #ef4444
+      background: rgba(34, 197, 94, 0.38);
+      border-color: #22c55e
+    }
+
+    .segment-marker.playback-active {
+      background: rgba(239, 68, 68, 0.45);
+      border-color: #ef4444;
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.38)
     }
 
     .resize-handle {
@@ -469,69 +586,252 @@
       border-radius: 4px
     }
 
+    .clip-editor-panel {
+      margin-top: 18px
+    }
+
     .clip-controls {
       background: rgba(0, 0, 0, 0.3);
       padding: 15px;
-      border-radius: 8px;
-      margin-top: 15px
+      border-radius: 12px;
+      margin-top: 15px;
+      width: 100%;
+      max-width: none
     }
 
     .clip-list {
-      max-height: 300px;
+      max-height: 420px;
       overflow-y: auto;
-      margin-top: 10px;
+      margin-top: 12px;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 10px
     }
 
     .clip-item {
-      background: rgba(16, 185, 129, 0.1);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      border-radius: 6px;
-      padding: 12px;
-      display: flex;
-      gap: 10px;
-      align-items: center;
+      background: linear-gradient(180deg, rgba(203, 213, 225, 0.14), rgba(15, 23, 42, 0.92));
+      border: 1px solid rgba(203, 213, 225, 0.32);
+      border-radius: 10px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      grid-template-areas:
+        "checkbox title actions"
+        ". meta meta"
+        ". slider slider";
+      gap: 8px 10px;
+      align-items: start;
+      min-height: 152px;
       transition: all 0.2s;
       cursor: pointer
     }
 
     .clip-item:hover {
-      background: rgba(16, 185, 129, 0.2);
-      border-color: rgba(16, 185, 129, 0.5)
+      background: rgba(226, 232, 240, 0.18);
+      border-color: rgba(226, 232, 240, 0.42)
+    }
+
+    .clip-item.selected {
+      box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.26)
     }
 
     .clip-item.checked {
-      background: rgba(239, 68, 68, 0.2);
-      border-color: rgba(239, 68, 68, 0.5)
+      background: linear-gradient(180deg, rgba(34, 197, 94, 0.22), rgba(15, 23, 42, 0.96));
+      border-color: rgba(34, 197, 94, 0.55)
+    }
+
+    .clip-item.playback-active {
+      background: linear-gradient(180deg, rgba(239, 68, 68, 0.24), rgba(15, 23, 42, 0.96));
+      border-color: rgba(239, 68, 68, 0.7);
+      box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.34), 0 0 18px rgba(239, 68, 68, 0.18)
     }
 
     .clip-checkbox {
-      width: 20px;
-      height: 20px;
+      grid-area: checkbox;
+      width: 18px;
+      height: 18px;
+      margin-top: 3px;
       cursor: pointer;
       flex-shrink: 0;
       pointer-events: none
     }
 
-    .clip-item-info {
-      flex: 1
+    .clip-item-title {
+      grid-area: title;
+      min-width: 0
+    }
+
+    .clip-item-name {
+      display: block;
+      font-size: 0.92rem;
+      line-height: 1.2;
+      margin-bottom: 4px
+    }
+
+    .clip-item-range {
+      font-size: 0.78rem;
+      color: #10b981;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    .clip-item-meta {
+      grid-area: meta;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.74rem;
+      color: #cbd5e1
+    }
+
+    .clip-item-duration {
+      color: #93c5fd;
+      flex-shrink: 0
     }
 
     .clip-item-actions {
+      grid-area: actions;
       display: flex;
+      gap: 6px
+    }
+
+    .clip-slider-wrap {
+      grid-area: slider;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      min-height: 64px;
       gap: 8px
     }
 
+    .clip-slider-status {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: #94a3b8
+    }
+
+    .clip-current-time {
+      color: #e2e8f0;
+      font-weight: 600
+    }
+
+    .clip-preview-slider {
+      width: 100%;
+      margin: 0;
+      height: 12px;
+      border-radius: 999px;
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+      appearance: none;
+      background: linear-gradient(90deg,
+          rgba(56, 189, 248, 0.95) 0%,
+          rgba(56, 189, 248, 0.95) var(--clip-progress, 0%),
+          rgba(51, 65, 85, 0.92) var(--clip-progress, 0%),
+          rgba(51, 65, 85, 0.92) 100%)
+    }
+
+    .clip-preview-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #f8fafc;
+      border: 2px solid #38bdf8;
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.72)
+    }
+
+    .clip-preview-slider::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #f8fafc;
+      border: 2px solid #38bdf8;
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.72)
+    }
+
+    .clip-preview-slider::-moz-range-track {
+      height: 12px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(51, 65, 85, 0.92)
+    }
+
     .btn-small {
-      padding: 6px 12px;
-      font-size: 0.85rem;
-      border-radius: 4px;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      font-size: 0.78rem;
+      border-radius: 8px;
       border: none;
       cursor: pointer;
       font-weight: 600;
-      transition: all 0.2s
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center
+    }
+
+    @media (max-width: 1700px) {
+      .clip-list {
+        grid-template-columns: repeat(4, minmax(0, 1fr))
+      }
+    }
+
+    @media (max-width: 1380px) {
+      .clip-list {
+        grid-template-columns: repeat(3, minmax(0, 1fr))
+      }
+    }
+
+    @media (max-width: 980px) {
+      .clip-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr))
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .top-control-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr))
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding: 10px
+      }
+
+      .container {
+        width: 96vw
+      }
+
+      .top-control-grid {
+        grid-template-columns: 1fr
+      }
+
+      .video-container {
+        width: 100%
+      }
+
+      .clip-list {
+        grid-template-columns: 1fr
+      }
+
+      .clip-item {
+        min-height: 144px
+      }
+
+      .settings-fab {
+        top: 12px;
+        right: 12px;
+        width: 48px;
+        height: 48px
+      }
     }
 
     #overviewPopup {
@@ -617,6 +917,8 @@
 </head>
 
 <body>
+  <button id="settingsToggleBtn" class="settings-fab" type="button" title="自動検出詳細設定を開閉" aria-controls="autoDetectSection"
+    aria-expanded="false">⚙</button>
 
   <div class="container">
     <header class="header">
@@ -624,64 +926,33 @@
       <p class="subtitle">動画のタイムラインで手動編集 → 完璧な切り出し <span style="font-size:0.8rem;color:#10b981;">(Python Backend)</span></p>
     </header>
 
-    <div style="display:flex;gap:15px;align-items:center;flex-wrap:wrap;margin-bottom:20px">
-      <div style="flex:1;min-width:300px;">
+    <div class="top-control-grid">
+      <div class="top-control-card">
         <label style="margin-bottom:4px;color:#d1d5db;font-size:0.9rem;">📂 動画ファイルのパス <span style="color:#6ee7b7;font-size:0.8rem;">（入力欄をダブルクリック→エクスプローラーで選択）</span></label>
-        <div style="display:flex;gap:8px;">
+        <div class="top-input-row">
           <input type="text" id="filePathInput" class="input" placeholder="ダブルクリックでエクスプローラーを開く / 直接パスを入力してEnter" style="flex:1;cursor:pointer;">
           <button id="loadFileBtn" class="btn btn-primary" style="margin:0;white-space:nowrap;">読み込み</button>
         </div>
       </div>
-      <div style="flex:1;min-width:200px;">
+      <div class="top-control-card">
         <label style="margin-bottom:4px;color:#d1d5db;font-size:0.9rem;">📁 保存先フォルダ <span style="color:#6ee7b7;font-size:0.8rem;">（ダブルクリックで選択）</span></label>
-        <input type="text" id="outputDirInput" class="input" placeholder="ダブルクリックで選択 / 空欄で動画と同じフォルダ" style="cursor:pointer;">
+        <div class="top-input-row">
+          <input type="text" id="outputDirInput" class="input" placeholder="ダブルクリックで選択 / 空欄で動画と同じフォルダ" style="cursor:pointer;">
+          <button id="browseOutputDirBtn" class="btn btn-secondary" type="button">参照</button>
+        </div>
+      </div>
+      <div class="top-control-card top-action-card">
+        <label style="margin-bottom:4px;color:#d1d5db;font-size:0.9rem;">🔍 自動検出</label>
+        <button id="analyzeBtn" class="btn btn-process top-analyze-btn" style="padding:10px;font-size:1rem">🔍 自動検出</button>
       </div>
     </div>
     <div id="serverStatus" style="margin-bottom:15px;padding:10px;border-radius:8px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;font-size:0.9rem;display:none;">⚠️ サーバーに接続できません。server.pyを起動してください。</div>
-
-    <!-- 自動検出セクションを非表示に -->
-    <section class="card" id="autoDetectSection">
-      <h3 class="section-title">⚙️ 自動検出設定</h3>
-      <div class="threshold-box">
-        <h4 class="group-title">🎚️ 音量による自動検出条件</h4>
-        <p class="help-text" style="margin-bottom:10px;">💡 指定した閾値(X)より大きな音が、指定秒数(Y)以上連続した箇所を、指定秒数(Z)切り取ります。</p>
-        <div class="threshold-container">
-          <div class="settings-row" style="margin-bottom:15px;">
-            <div class="setting-item" style="flex:2;">
-              <label>🔴 (X) 音量閾値: <span id="loudThresholdValue">-15</span> dB</label>
-              <input type="range" id="loudThreshold" min="-60" max="-10" value="-15" class="slider loud">
-            </div>
-            <div class="setting-item" style="flex:1;">
-              <label>⏱️ (Y) 継続秒数</label>
-              <input type="number" id="durationThreshold" value="20.0" step="0.1" min="0.1" class="input" title="この秒数以上大きな音が続く必要があります">
-            </div>
-          </div>
-        </div>
+    <div id="progressContainer" class="progress-container top-progress">
+      <div class="progress-info"><span id="progressText">処理中...</span><span id="progressPercent">0%</span></div>
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
       </div>
-
-      <div class="settings-group">
-        <div class="settings-row-4">
-          <div class="setting-item">
-            <label>✂️ (Z) クリップ長さ(秒)</label>
-            <input type="number" id="clipDuration" value="35.0" step="1" min="1" class="input">
-          </div>
-          <div class="setting-item">
-            <label>🔇 次検出まで無視(秒)</label>
-            <input type="number" id="minGap" value="1.0" step="0.5" min="0.5" class="input">
-          </div>
-          <div class="setting-item"></div>
-          <div class="setting-item">
-            <button id="analyzeBtn" class="btn btn-process" style="margin:0;padding:10px;font-size:1rem">🔍自動検出</button>
-          </div>
-        </div>
-      </div>
-      <div id="progressContainer" class="progress-container">
-        <div class="progress-info"><span id="progressText">処理中...</span><span id="progressPercent">0%</span></div>
-        <div class="progress-bar">
-          <div id="progressFill" class="progress-fill"></div>
-        </div>
-      </div>
-    </section>
+    </div>
 
     <section class="card">
       <h3 class="section-title">プレビュー & タイムライン編集</h3>
@@ -701,6 +972,19 @@
         <div class="timeline-controls">
           <button class="timeline-btn add" id="timelineAddBtn" title="クリップ追加 (P)">➕</button>
           <button class="timeline-btn remove" id="timelineRemoveBtn" title="クリップ削除 (Backspace)">➖</button>
+        </div>
+      </div>
+
+      <div class="clip-editor-panel" id="clipEditSection" style="display:none">
+        <h4 class="group-title">✂️ クリップ編集</h4>
+        <div class="clip-controls">
+          <div class="button-group">
+            <button id="addClipBtn" class="btn btn-primary">➕ クリップを追加</button>
+            <button id="selectAllClipsBtn" class="btn btn-secondary">☑️ 全選択</button>
+            <button id="deselectAllClipsBtn" class="btn btn-secondary">⬜ 全選択解除</button>
+            <button id="deleteClipBtn" class="btn btn-danger">🗑️ チェック済みを削除</button>
+          </div>
+          <div class="clip-list" id="clipList"></div>
         </div>
       </div>
 
@@ -774,23 +1058,7 @@
           </select>
         </div>
       </div>
-
-  </div>
-
-  </section>
-
-  <section class="card" id="clipEditSection" style="display:none">
-    <h3 class="section-title">✂️ クリップ編集</h3>
-    <div class="clip-controls">
-      <div class="button-group">
-        <button id="addClipBtn" class="btn btn-primary">➕ クリップを追加</button>
-        <button id="selectAllClipsBtn" class="btn btn-secondary">☑️ 全選択</button>
-        <button id="deselectAllClipsBtn" class="btn btn-secondary">⬜ 全選択解除</button>
-        <button id="deleteClipBtn" class="btn btn-danger">🗑️ チェック済みを削除</button>
-      </div>
-      <div class="clip-list" id="clipList"></div>
-    </div>
-  </section>
+    </section>
 
   <section class="card">
     <h3 class="section-title">📋 処理ログ</h3>
@@ -920,6 +1188,42 @@
       <div style="display:flex;gap:10px;margin-top:15px;">
         <button id="downloadCompressedBtn" class="btn btn-primary" style="flex:1;margin:0">💾 圧縮ファイルを再ダウンロード</button>
         <button id="useCompressedBtn" class="btn btn-secondary" style="flex:1;margin:0">✅ このファイルを解析に使用</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card settings-panel" id="autoDetectSection" hidden>
+    <div class="settings-panel-header">
+      <h3 class="section-title">⚙️ 自動検出詳細設定</h3>
+      <button id="closeSettingsBtn" class="settings-close-btn" type="button">閉じる</button>
+    </div>
+    <div class="threshold-box">
+      <h4 class="group-title">🎚️ 音量による自動検出条件</h4>
+      <p class="help-text" style="margin-bottom:10px;">💡 指定した閾値(X)より大きな音が、指定秒数(Y)以上連続した箇所を、指定秒数(Z)切り取ります。</p>
+      <div class="threshold-container">
+        <div class="settings-row" style="margin-bottom:15px;">
+          <div class="setting-item" style="flex:2;">
+            <label>🔴 (X) 音量閾値: <span id="loudThresholdValue">-15</span> dB</label>
+            <input type="range" id="loudThreshold" min="-60" max="-10" value="-15" class="slider loud">
+          </div>
+          <div class="setting-item" style="flex:1;">
+            <label>⏱️ (Y) 継続秒数</label>
+            <input type="number" id="durationThreshold" value="23.0" step="0.1" min="0.1" class="input" title="この秒数以上大きな音が続く必要があります">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <div class="settings-row">
+        <div class="setting-item">
+          <label>✂️ (Z) クリップ長さ(秒)</label>
+          <input type="number" id="clipDuration" value="28.0" step="1" min="1" class="input">
+        </div>
+        <div class="setting-item">
+          <label>🔇 次検出まで無視(秒)</label>
+          <input type="number" id="minGap" value="1.0" step="0.5" min="0.5" class="input">
+        </div>
       </div>
     </div>
   </section>

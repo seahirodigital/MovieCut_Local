@@ -94,6 +94,11 @@ app.add_middleware(
 BASE_DIR = Path(__file__).parent.resolve()
 TEMP_DIR = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 # WebSocket接続の管理
 active_connections: list[WebSocket] = []
@@ -154,14 +159,14 @@ async def broadcast_progress(message: str, percent: float, msg_type: str = "prog
 async def serve_html():
     """HTMLファイルを配信"""
     html_path = BASE_DIR / "movie-autocut.html"
-    return FileResponse(html_path, media_type="text/html")
+    return FileResponse(html_path, media_type="text/html", headers=NO_CACHE_HEADERS.copy())
 
 
 @app.get("/app.js")
 async def serve_app_js():
     """メインJavaScriptファイルを配信"""
     js_path = BASE_DIR / "app.js"
-    return FileResponse(js_path, media_type="application/javascript")
+    return FileResponse(js_path, media_type="application/javascript", headers=NO_CACHE_HEADERS.copy())
 
 
 @app.post("/api/analyze")
@@ -661,22 +666,30 @@ async def dialog_open_directory():
     """ネイティブのフォルダ選択ダイアログを開き、選択されたパスを返す"""
     import tkinter as tk
     from tkinter import filedialog
-    
-    root = tk.Tk()
-    root.withdraw()
-    root.lift()
-    root.attributes("-topmost", True)
-    
-    dir_path = filedialog.askdirectory(
-        title="保存先フォルダを選択"
-    )
-    root.destroy()
-    
-    if dir_path:
-        dir_path = dir_path.replace("/", "\\")
-        return JSONResponse({"success": True, "path": dir_path})
-    else:
+
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update_idletasks()
+        root.update()
+
+        dir_path = filedialog.askdirectory(
+            parent=root,
+            title="保存先フォルダを選択",
+            mustexist=True,
+        )
+
+        if dir_path:
+            dir_path = dir_path.replace("/", "\\")
+            return JSONResponse({"success": True, "path": dir_path})
         return JSONResponse({"success": False, "path": ""})
+    except Exception as e:
+        return JSONResponse({"success": False, "path": "", "error": str(e)}, status_code=500)
+    finally:
+        if root is not None:
+            root.destroy()
 
 
 # ===== WebSocket エンドポイント =====
