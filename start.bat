@@ -5,15 +5,30 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONLEGACYWINDOWSSTDIO=1"
 set "START_URL=http://127.0.0.1:8765/"
+set "SCRIPT_DIR=%~dp0"
+
+cd /d "%SCRIPT_DIR%"
+
+set "BOOTSTRAP=python"
+where python >nul 2>nul
+if errorlevel 1 (
+    where py >nul 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Python was not found.
+        pause
+        exit /b 1
+    )
+    set "BOOTSTRAP=py -3"
+)
 
 echo ========================================
 echo   Movie AutoCut - Startup Script
 echo ========================================
 echo.
 
-if not exist "venv" (
+if not exist "venv\Scripts\python.exe" (
     echo [*] Creating virtual environment...
-    python -m venv venv
+    %BOOTSTRAP% -m venv venv
     echo [OK] Virtual environment created.
 )
 

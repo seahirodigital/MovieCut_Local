@@ -280,8 +280,13 @@ function init() {
   const reviewPrevBtn = document.getElementById('reviewPrevBtn');
   const reviewNextBtn = document.getElementById('reviewNextBtn');
 
-  filePathInput.title = 'ダブルクリックでエクスプローラーを開く';
-  outputDirInput.title = 'ダブルクリックでフォルダを選択';
+  filePathInput.title = 'ダブルクリックでファイル選択ダイアログを開く';
+  outputDirInput.title = 'ダブルクリックでフォルダ選択ダイアログを開く';
+
+  filePathInput.title = 'ダブルクリックでファイル選択ダイアログを開く';
+  outputDirInput.title = 'ダブルクリックでフォルダ選択ダイアログを開く';
+  filePathInput.placeholder = 'ダブルクリックでファイル選択ダイアログを開く / 直接パスを入力してEnter';
+  outputDirInput.placeholder = 'ダブルクリックで保存先フォルダを選択 / 空欄で動画と同じフォルダ';
 
   filePathInput.addEventListener('dblclick', async () => {
     try {

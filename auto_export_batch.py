@@ -13,8 +13,11 @@ if str(PROJECT_DIR) not in sys.path:
 import server
 
 
-SOURCE_DIR = Path(r"C:\Users\HCY\Downloads\Jinricp\自動抽出")
-OUTPUT_DIR = Path(r"C:\Users\HCY\Downloads\Jinricp\自動抽出後")
+SOURCE_DIR = server.get_default_auto_export_source_dir()
+OUTPUT_DIR = server.get_default_auto_export_output_dir()
+SOURCE_DIR = server.get_default_auto_export_source_dir()
+OUTPUT_DIR = server.get_default_auto_export_output_dir()
+
 VIDEO_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -216,6 +219,7 @@ async def main() -> int:
     print("-" * 72)
 
     if not SOURCE_DIR.is_dir():
+        print("必要に応じて環境変数 MOVIE_AUTOCUT_AUTO_EXPORT_SOURCE_DIR を設定してください。")
         print("入力フォルダが見つかりません。")
         return 1
 

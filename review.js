@@ -20,6 +20,7 @@ let reviewUndoStack = [];
 let deletingReviewPaths = new Set();
 const maxUndoSteps = 50;
 let progressHideTimer = null;
+let reviewRejectDirLabel = '削除フォルダ';
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -38,10 +39,61 @@ function getBaseName(filePath) {
 }
 
 function getParentPath(filePath) {
-  const normalized = String(filePath || '').replace(/\\/g, '/');
+  const rawPath = String(filePath || '');
+  const usesBackslash = rawPath.includes('\\') && !rawPath.includes('/');
+  const normalized = rawPath.replace(/\\/g, '/');
   const lastSlash = normalized.lastIndexOf('/');
   if (lastSlash <= 0) return '';
-  return normalized.slice(0, lastSlash).replace(/\//g, '\\');
+  const parentPath = normalized.slice(0, lastSlash);
+  return usesBackslash ? parentPath.replace(/\//g, '\\') : parentPath;
+}
+
+function applyReviewPlatformCopy() {
+  const filePathsLabel = document.querySelector('label[for="reviewFilePathsInput"]');
+  if (filePathsLabel) {
+    filePathsLabel.textContent = '📂 動画ファイルのパス （入力欄をダブルクリック→ファイル選択ダイアログで複数選択）';
+  }
+
+  const filePathsInput = document.getElementById('reviewFilePathsInput');
+  if (filePathsInput) {
+    filePathsInput.placeholder = 'ダブルクリックでファイル選択ダイアログを開く / 手入力する場合は改行区切りで入力';
+  }
+
+  const sideNote = document.querySelector('.side-panel-note');
+  if (sideNote) {
+    sideNote.innerHTML = `
+      <strong>高速判定ページについて</strong>
+      ここでは既に小分け済みの複数動画をまとめて読み込み、レビュー直下のカードで使える動画かどうかを高速に判定します。✕ は元ファイルを <code>${reviewRejectDirLabel}</code> へ移動待ち登録します。
+    `;
+  }
+
+  const subtitle = document.querySelector('.subtitle');
+  if (subtitle) {
+    subtitle.textContent = '既に小分け済みの複数動画を一括で読み込み、1本ずつ OK / 削除フォルダ移動待ち登録 を高速判定します。';
+  }
+
+  const helpTexts = document.querySelectorAll('.top-control-card .help-text');
+  if (helpTexts[0]) {
+    helpTexts[0].textContent = '通常ページと同じ感覚で、入力欄のダブルクリックから複数ファイルを選択できます。手入力する場合は 1 行に 1 パスずつ入力してください。';
+  }
+  if (helpTexts[1]) {
+    helpTexts[1].innerHTML = `Backspace / Delete は現在の動画を <code>${reviewRejectDirLabel}</code> へ移動待ち登録、Space は再生/停止、← → は 5 秒移動、D/S は再生速度変更です。`;
+  }
+}
+
+async function loadAppConfig() {
+  try {
+    const response = await fetch(`${API_BASE}/api/app-config`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data.review_reject_dir) {
+      reviewRejectDirLabel = data.review_reject_dir;
+    }
+  } catch (error) {
+    console.warn('アプリ設定の取得に失敗しました:', error);
+  }
+
+  applyReviewPlatformCopy();
 }
 
 function getCurrentReviewItem() {
@@ -1217,6 +1269,9 @@ function init() {
   videoElement = document.getElementById('videoPlayer');
   canvasElement = document.getElementById('waveformCanvas');
   if (!videoElement) return;
+
+  applyReviewPlatformCopy();
+  loadAppConfig();
 
   const navMenuBtn = document.getElementById('navMenuBtn');
   const sidePanelOverlay = document.getElementById('sidePanelOverlay');

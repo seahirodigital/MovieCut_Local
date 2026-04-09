@@ -101,7 +101,43 @@ NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
-REVIEW_REJECT_DIR = Path(r"C:\Users\HCY\Downloads\Jinricp\削除")
+REVIEW_REJECT_DIR = Path.home() / "Downloads" / "Jinricp" / "削除"
+def get_env_path(env_name: str, default_path: Path) -> Path:
+    configured_path = os.getenv(env_name)
+    if configured_path:
+        return Path(configured_path).expanduser()
+    return default_path
+
+
+def get_default_media_root() -> Path:
+    return get_env_path(
+        "MOVIE_AUTOCUT_MEDIA_ROOT",
+        Path.home() / "Downloads" / "Jinricp",
+    )
+
+
+def get_default_auto_export_source_dir() -> Path:
+    return get_env_path(
+        "MOVIE_AUTOCUT_AUTO_EXPORT_SOURCE_DIR",
+        get_default_media_root() / "自動抽出",
+    )
+
+
+def get_default_auto_export_output_dir() -> Path:
+    return get_env_path(
+        "MOVIE_AUTOCUT_AUTO_EXPORT_OUTPUT_DIR",
+        get_default_media_root() / "自動抽出後",
+    )
+
+
+def get_default_review_reject_dir() -> Path:
+    return get_env_path(
+        "MOVIE_AUTOCUT_REVIEW_REJECT_DIR",
+        get_default_media_root() / "削除",
+    )
+
+
+REVIEW_REJECT_DIR = get_default_review_reject_dir()
 REVIEW_REJECT_FAILURE_LOG = TEMP_DIR / "review_reject_move_failures.log"
 
 # WebSocket接続の管理
@@ -180,6 +216,27 @@ def append_review_reject_failure(source_path: str, error_message: str):
 
 def normalize_managed_path(file_path: str | Path) -> str:
     return str(Path(file_path).resolve())
+
+
+def normalize_dialog_selection(selected_path: str) -> str:
+    return os.path.normpath(selected_path)
+
+
+def prepare_dialog_root(root) -> None:
+    root.withdraw()
+    try:
+        root.lift()
+    except Exception:
+        pass
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
+    try:
+        root.update_idletasks()
+        root.update()
+    except Exception:
+        pass
 
 
 def increment_active_video_stream(file_path: str | Path):
@@ -957,10 +1014,30 @@ async def open_folder(path: str):
     if not folder.exists():
         return JSONResponse({"error": "フォルダが存在しません"}, status_code=400)
     
-    if sys.platform == "win32":
-        os.startfile(str(folder))
-    
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(folder))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        else:
+            opener = shutil.which("xdg-open")
+            if not opener:
+                return JSONResponse({"error": "このOSではフォルダを開くコマンドが見つかりません"}, status_code=501)
+            subprocess.Popen([opener, str(folder)])
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
     return JSONResponse({"success": True})
+
+
+@app.get("/api/app-config")
+async def get_app_config():
+    return JSONResponse({
+        "platform": sys.platform,
+        "review_reject_dir": str(REVIEW_REJECT_DIR),
+        "auto_export_source_dir": str(get_default_auto_export_source_dir()),
+        "auto_export_output_dir": str(get_default_auto_export_output_dir()),
+    })
 
 
 @app.get("/api/dialog/open-file")
@@ -970,8 +1047,8 @@ async def dialog_open_file():
     from tkinter import filedialog
     
     root = tk.Tk()
+    prepare_dialog_root(root)
     root.withdraw()        # メインウィンドウを非表示
-    root.lift()
     root.attributes("-topmost", True)  # 最前面に表示
     
     file_path = filedialog.askopenfilename(
@@ -985,7 +1062,7 @@ async def dialog_open_file():
     
     if file_path:
         # Windowsのパス区切りに統一
-        file_path = file_path.replace("/", "\\")
+        file_path = normalize_dialog_selection(file_path)
         return JSONResponse({"success": True, "path": file_path})
     else:
         return JSONResponse({"success": False, "path": ""})
@@ -1000,9 +1077,7 @@ async def dialog_open_files():
     root = None
     try:
         root = tk.Tk()
-        root.withdraw()
-        root.lift()
-        root.attributes("-topmost", True)
+        prepare_dialog_root(root)
 
         file_paths = filedialog.askopenfilenames(
             title="判定する動画ファイルを複数選択",
@@ -1012,7 +1087,7 @@ async def dialog_open_files():
             ]
         )
 
-        normalized_paths = [path.replace("/", "\\") for path in file_paths if path]
+        normalized_paths = [normalize_dialog_selection(path) for path in file_paths if path]
         return JSONResponse({
             "success": len(normalized_paths) > 0,
             "paths": normalized_paths,
@@ -1033,10 +1108,7 @@ async def dialog_open_directory():
     root = None
     try:
         root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        root.update_idletasks()
-        root.update()
+        prepare_dialog_root(root)
 
         dir_path = filedialog.askdirectory(
             parent=root,
@@ -1045,7 +1117,7 @@ async def dialog_open_directory():
         )
 
         if dir_path:
-            dir_path = dir_path.replace("/", "\\")
+            dir_path = normalize_dialog_selection(dir_path)
             return JSONResponse({"success": True, "path": dir_path})
         return JSONResponse({"success": False, "path": ""})
     except Exception as e:
