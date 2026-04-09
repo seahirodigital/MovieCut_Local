@@ -1,6 +1,8 @@
 fastapi==0.115.0
 uvicorn==0.30.6
-numpy==2.1.1
+numpy==2.4.4; python_version >= "3.14"
+numpy==2.1.1; python_version >= "3.10" and python_version < "3.14"
+numpy==2.0.2; python_version < "3.10"
 websockets==13.0
 python-multipart==0.0.9
 imageio-ffmpeg==0.5.1
