@@ -1734,7 +1734,7 @@ function handleAddClip() {
   }
   saveState();
   const duration = videoElement.duration;
-  const defaultDuration = parseFloat(document.getElementById('clipDuration').value) || 10;
+  const defaultDuration = parseFloat(document.getElementById('clipDuration').value) || 32;
   const newStart = videoElement.currentTime || 0;
   const newEnd = Math.min(newStart + defaultDuration, duration);
   clips.push({ start: newStart, end: newEnd });
