@@ -24,6 +24,7 @@ let zoomLevel = 1;
 let scrollOffset = 0;
 let dragMoved = false;
 let checkedClips = new Set();
+let processedClips = new Set();
 let undoStack = [];
 let maxUndoSteps = 50;
 let isWaveformDragging = false;
@@ -305,6 +306,10 @@ async function handleFileLoad() {
   // 変数をリセット
   waveformData = null;
   clips = [];
+  checkedClips.clear();
+  processedClips.clear();
+  selectedClipIndex = -1;
+  clearClipPlaybackMonitor();
   detectedSpikes = [];
   renderClips();
   updateClipList();
@@ -377,8 +382,8 @@ async function analyzeAudioFromServer(filePath) {
     });
     const data = await resp.json();
 
-    if (!data.success) {
-      addMessage(`音声解析エラー: ${data.error}`, 'error');
+    if (!data || data.success === false) {
+      addMessage(`音声解析エラー: ${data?.error || '音声解析に失敗しました'}`, 'error');
       document.getElementById('progressContainer').style.display = 'none';
       return;
     }
@@ -430,7 +435,7 @@ async function detectSpikesFromServer(filePath) {
     });
     const data = await resp.json();
 
-    if (!data.success) {
+    if (!data || data.success === false) {
       addMessage(`検出エラー: ${data.error}`, 'error');
       return data;
     }
@@ -471,6 +476,9 @@ async function handleAnalyze() {
 
   if (data && data.clips) {
     clips = data.clips.map(c => ({ start: c.start, end: c.end }));
+    checkedClips.clear();
+    processedClips.clear();
+    selectedClipIndex = -1;
     addMessage(`${clips.length}個のクリップを作成しました`, 'success');
 
     renderClips();
@@ -519,12 +527,7 @@ async function handleDownloadSegments() {
       audio_bitrate: audioBitrate
     });
 
-    const resp = await fetch(`${API_BASE}/api/export-clips`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString()
-    });
-    const data = await resp.json();
+    const { data, error, fallbackUsed } = await requestClipExport(params);
 
     if (data.success) {
       let successCount = 0;
@@ -544,7 +547,7 @@ async function handleDownloadSegments() {
         fetch(`${API_BASE}/api/open-folder?path=${encodeURIComponent(data.output_dir)}`);
       }
     } else {
-      addMessage(`書き出しエラー: ${data.error}`, 'error');
+      addMessage(`書き出しエラー: ${error || data?.error || '書き出しに失敗しました'}`, 'error');
     }
   } catch (e) {
     addMessage(`サーバー通信エラー: ${e.message}`, 'error');
@@ -760,6 +763,7 @@ function saveState() {
   undoStack.push({
     clips: JSON.parse(JSON.stringify(clips)),
     checkedClips: new Set(checkedClips),
+    processedClips: new Set(processedClips),
     selectedClipIndex: selectedClipIndex
   });
   if (undoStack.length > maxUndoSteps) undoStack.shift();
@@ -773,6 +777,7 @@ function handleUndo() {
   const state = undoStack.pop();
   clips = JSON.parse(JSON.stringify(state.clips));
   checkedClips = new Set(state.checkedClips);
+  processedClips = new Set(state.processedClips || []);
   selectedClipIndex = state.selectedClipIndex;
   renderClips();
   updateClipList();
@@ -847,6 +852,7 @@ function handleMouseMove(e) {
     const clipDuration = clip.end - clip.start;
     let newStart = clip.start + deltaTime;
     newStart = Math.max(0, Math.min(newStart, duration - clipDuration));
+    processedClips.delete(selectedClipIndex);
     clips[selectedClipIndex] = { start: newStart, end: newStart + clipDuration };
     if (videoElement) videoElement.currentTime = newStart;
     dragStartX = e.clientX;
@@ -854,6 +860,7 @@ function handleMouseMove(e) {
     updateClipList();
   } else if (isResizing && selectedClipIndex >= 0) {
     const clip = clips[selectedClipIndex];
+    processedClips.delete(selectedClipIndex);
     if (resizeDirection === 'left') {
       let newStart = clip.start + deltaTime;
       newStart = Math.max(0, Math.min(newStart, clip.end - 0.5));
@@ -1113,6 +1120,13 @@ function renderClips() {
 function handleMarkerMouseDown(e) {
   if (e.target.classList.contains('resize-handle')) return;
   const index = parseInt(e.currentTarget.dataset.index);
+  if (processedClips.has(index)) {
+    selectedClipIndex = index;
+    renderClips();
+    updateClipList();
+    e.preventDefault();
+    return;
+  }
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
     checkedClips.has(index) ? checkedClips.delete(index) : checkedClips.add(index);
@@ -1144,6 +1158,101 @@ function handleResizeMouseDown(e) {
 
 function getClipPreviewTime(clip, currentTime) {
   return Math.min(clip.end, Math.max(clip.start, currentTime));
+}
+
+function getClipSignature(clip) {
+  if (!clip) return '';
+  return `${clip.start.toFixed(3)}-${clip.end.toFixed(3)}`;
+}
+
+function remapIndexedSet(sourceSet, removedIndexes) {
+  const removed = Array.isArray(removedIndexes) ? [...removedIndexes].sort((a, b) => a - b) : [removedIndexes];
+  const next = new Set();
+
+  sourceSet.forEach((index) => {
+    if (removed.includes(index)) return;
+    const shift = removed.filter((removedIndex) => removedIndex < index).length;
+    next.add(index - shift);
+  });
+
+  return next;
+}
+
+function remapSelectedIndex(sourceIndex, removedIndexes) {
+  if (sourceIndex < 0) return -1;
+  const removed = Array.isArray(removedIndexes) ? [...removedIndexes].sort((a, b) => a - b) : [removedIndexes];
+  if (removed.includes(sourceIndex)) return -1;
+  return sourceIndex - removed.filter((removedIndex) => removedIndex < sourceIndex).length;
+}
+
+function getCheckedExportIndexes() {
+  return Array.from(checkedClips)
+    .filter((index) => clips[index] && !processedClips.has(index))
+    .sort((a, b) => a - b);
+}
+
+function getApiErrorMessage(resp, data, rawText) {
+  if (data && typeof data.error === 'string' && data.error.trim()) {
+    return data.error.trim();
+  }
+
+  if (data && typeof data.detail === 'string' && data.detail.trim()) {
+    return data.detail.trim();
+  }
+
+  if (data && Array.isArray(data.detail) && data.detail.length > 0) {
+    return data.detail.map((item) => item.msg || JSON.stringify(item)).join(' / ');
+  }
+
+  if (typeof rawText === 'string' && rawText.trim()) {
+    return rawText.trim().slice(0, 300);
+  }
+
+  return `HTTP ${resp.status}${resp.statusText ? ' ' + resp.statusText : ''}`;
+}
+
+async function requestClipExport(params) {
+  const endpoints = [
+    `${API_BASE}/api/export-clips-async`,
+    `${API_BASE}/api/export-clips`
+  ];
+
+  let lastErrorMessage = '';
+
+  for (let i = 0; i < endpoints.length; i++) {
+    const endpoint = endpoints[i];
+
+    try {
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      });
+
+      const rawText = await resp.text();
+      let data = {};
+
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        data = {};
+      }
+
+      if (resp.ok && data.success !== false) {
+        return { data, fallbackUsed: i > 0 };
+      }
+
+      lastErrorMessage = getApiErrorMessage(resp, data, rawText);
+    } catch (e) {
+      lastErrorMessage = e.message;
+    }
+  }
+
+  return {
+    data: null,
+    fallbackUsed: false,
+    error: lastErrorMessage || '書き出しに失敗しました'
+  };
 }
 
 function getActivePlaybackClipIndex(currentTime) {
@@ -1182,15 +1291,21 @@ function syncClipPreviewSliders() {
 
     const slider = item.querySelector('.clip-preview-slider');
     const currentLabel = item.querySelector('.clip-current-time');
+    const checkbox = item.querySelector('.clip-checkbox');
     const previewTime = getClipPreviewTime(clip, currentTime);
     const isActive = index === activePlaybackIndex;
 
     item.classList.toggle('selected', index === selectedClipIndex);
     item.classList.toggle('checked', checkedClips.has(index));
+    item.classList.toggle('exported', processedClips.has(index));
     item.classList.toggle('playback-active', isActive);
 
     if (slider && document.activeElement !== slider) {
       slider.value = previewTime;
+    }
+    if (checkbox) {
+      checkbox.checked = checkedClips.has(index);
+      checkbox.disabled = processedClips.has(index);
     }
     if (slider) {
       updateClipPreviewSliderFill(slider);
@@ -1444,6 +1559,330 @@ function handleDeselectAllClips() {
   renderClips();
   updateClipList();
   addMessage(`${previousCount}個のクリップの選択を解除しました`, 'success');
+}
+
+function updateClipList() {
+  const clipList = document.getElementById('clipList');
+  clipList.innerHTML = '';
+
+  if (clips.length === 0) {
+    clipList.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#9ca3af;padding:20px">クリップがありません</p>';
+    return;
+  }
+
+  clips.forEach((clip, index) => {
+    const isProcessed = processedClips.has(index);
+    const item = document.createElement('div');
+    item.className = 'clip-item';
+    item.dataset.index = index;
+
+    if (index === selectedClipIndex) item.classList.add('selected');
+    if (checkedClips.has(index)) item.classList.add('checked');
+    if (isProcessed) item.classList.add('exported');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'clip-checkbox';
+    checkbox.checked = checkedClips.has(index);
+    checkbox.disabled = isProcessed;
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'clip-item-title';
+    titleDiv.innerHTML = '<strong class="clip-item-name">クリップ ' + (index + 1) + '</strong><span class="clip-item-range">' + formatTime(clip.start) + ' → ' + formatTime(clip.end) + '</span>';
+
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'clip-item-meta';
+    metaDiv.innerHTML = '<span class="clip-item-duration">' + formatTime(clip.end - clip.start) + '</span>' + (isProcessed ? '<span class="clip-item-exported-badge">処理済</span>' : '');
+
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'clip-item-actions';
+    actionsDiv.innerHTML =
+      '<button class="btn-small" style="background:' + (isProcessed ? '#64748b' : '#10b981') + ';color:white" title="' + (isProcessed ? 'このクリップは処理済みです' : 'このクリップを単体出力') + '" onclick="exportSingleClip(' + index + ', this)" ' + (isProcessed ? 'disabled' : '') + '>💾</button>' +
+      '<button class="btn-small" style="background:#8b5cf6;color:white" title="このクリップを再生" onclick="playClip(' + index + ')">▶</button>' +
+      '<button class="btn-small" style="background:#ef4444;color:white" title="このクリップを削除" onclick="deleteSingleClip(' + index + ')">✕</button>';
+
+    const sliderWrap = document.createElement('div');
+    sliderWrap.className = 'clip-slider-wrap';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'clip-preview-slider';
+    slider.min = clip.start;
+    slider.max = clip.end;
+    slider.step = '0.05';
+    slider.value = getClipPreviewTime(clip, videoElement ? videoElement.currentTime : clip.start);
+    slider.dataset.index = index;
+
+    const sliderStatus = document.createElement('div');
+    sliderStatus.className = 'clip-slider-status';
+    sliderStatus.innerHTML = '<span>' + formatTime(clip.start) + '</span><span class="clip-current-time">' + formatTime(parseFloat(slider.value)) + '</span><span>' + formatTime(clip.end) + '</span>';
+
+    updateClipPreviewSliderFill(slider);
+
+    slider.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    slider.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      selectedClipIndex = index;
+      renderClips();
+      syncClipPreviewSliders();
+    });
+    slider.addEventListener('input', (e) => {
+      e.stopPropagation();
+      selectedClipIndex = index;
+      clearClipPlaybackMonitor();
+      if (videoElement) {
+        videoElement.currentTime = parseFloat(e.target.value);
+      }
+      renderClips();
+      updateClipPreviewSliderFill(slider);
+      syncClipPreviewSliders();
+    });
+
+    sliderWrap.appendChild(slider);
+    sliderWrap.appendChild(sliderStatus);
+
+    item.appendChild(checkbox);
+    item.appendChild(titleDiv);
+    item.appendChild(metaDiv);
+    item.appendChild(actionsDiv);
+    item.appendChild(sliderWrap);
+
+    item.addEventListener('click', (e) => {
+      if (!e.target.closest('.btn-small') && !e.target.closest('.clip-preview-slider')) {
+        selectedClipIndex = index;
+        if (!isProcessed) {
+          checkedClips.has(index) ? checkedClips.delete(index) : checkedClips.add(index);
+        }
+        renderClips();
+        updateClipList();
+      }
+    });
+
+    clipList.appendChild(item);
+  });
+
+  syncClipPreviewSliders();
+}
+
+function deleteSingleClip(index) {
+  saveState();
+  clips.splice(index, 1);
+  checkedClips = remapIndexedSet(checkedClips, index);
+  processedClips = remapIndexedSet(processedClips, index);
+  selectedClipIndex = remapSelectedIndex(selectedClipIndex, index);
+  renderClips();
+  updateClipList();
+  addMessage('クリップ ' + (index + 1) + ' を削除しました', 'success');
+}
+
+async function exportClipIndexes(exportIndexes, options = {}) {
+  if (!currentFilePath) {
+    addMessage('先に動画ファイルを読み込んでください', 'error');
+    return null;
+  }
+
+  if (!exportIndexes || exportIndexes.length === 0) {
+    addMessage(options.emptyMessage || '書き出すクリップをチェックしてください', 'warning');
+    return null;
+  }
+
+  const fps = parseInt(document.getElementById('fpsSelect').value, 10) || 30;
+  const videoBitrate = parseInt(document.getElementById('bitrateInput').value, 10) || 4500;
+  const audioBitrate = parseInt(document.getElementById('audioBitrateInput').value, 10) || 128;
+  const outputDir = document.getElementById('outputDirInput').value.trim() || '';
+  const requestFilePath = currentFilePath;
+  const requestTargets = exportIndexes
+    .filter((index) => clips[index])
+    .map((index) => ({
+      index,
+      signature: getClipSignature(clips[index]),
+      clip: {
+        start: clips[index].start,
+        end: clips[index].end
+      }
+    }));
+
+  if (requestTargets.length === 0) {
+    addMessage(options.emptyMessage || '書き出せるクリップがありません', 'warning');
+    return null;
+  }
+
+  const button = options.button || null;
+  const originalHtml = button ? button.innerHTML : '';
+  const progressContainer = document.getElementById('progressContainer');
+
+  if (button) {
+    button.innerHTML = options.busyHtml || '処理中<span class="spinner"></span>';
+    button.disabled = true;
+  }
+
+  if (options.showProgress && progressContainer) {
+    progressContainer.style.display = 'block';
+  }
+
+  addMessage(options.startMessage || `FFmpegで${requestTargets.length}個のクリップを書き出し中...`, 'info');
+
+  try {
+    const params = new URLSearchParams({
+      file_path: requestFilePath,
+      clips_json: JSON.stringify(requestTargets.map((target) => target.clip)),
+      output_dir: outputDir,
+      fps: fps,
+      video_bitrate: videoBitrate,
+      audio_bitrate: audioBitrate
+    });
+
+    const { data, error, fallbackUsed } = await requestClipExport(params);
+
+    if (!data || data.success === false) {
+      addMessage(`書き出しエラー: ${error || data?.error || '書き出しに失敗しました'}`, 'error');
+      return null;
+    }
+
+    if (fallbackUsed) {
+      addMessage('旧書き出しAPIへ自動切り替えしました。サーバー再起動後は新APIを使います', 'info');
+    }
+
+    let successCount = 0;
+    data.results.forEach((result, batchIndex) => {
+      const target = requestTargets[batchIndex];
+      const clipNumber = target ? target.index + 1 : batchIndex + 1;
+
+      if (result.success) {
+        successCount++;
+        addMessage(`クリップ ${clipNumber}: ${result.filename} (${result.size_mb} MB)`, 'success');
+
+        if (
+          currentFilePath === requestFilePath &&
+          target &&
+          clips[target.index] &&
+          getClipSignature(clips[target.index]) === target.signature
+        ) {
+          processedClips.add(target.index);
+          checkedClips.delete(target.index);
+        }
+      } else {
+        addMessage(`クリップ ${clipNumber}: ${result.error}`, 'error');
+      }
+    });
+
+    if (currentFilePath === requestFilePath) {
+      renderClips();
+      updateClipList();
+    }
+
+    if (data.output_dir) {
+      addMessage(`📁 保存先: ${data.output_dir}`, 'info');
+      if (options.openFolder !== false) {
+        fetch(`${API_BASE}/api/open-folder?path=${encodeURIComponent(data.output_dir)}`).catch(() => {});
+      }
+    }
+
+    addMessage(options.successMessage || `${successCount}/${requestTargets.length}個のクリップを書き出しました`, 'success');
+    return data;
+  } catch (e) {
+    addMessage(`サーバー通信エラー: ${e.message}`, 'error');
+    return null;
+  } finally {
+    if (button) {
+      button.innerHTML = originalHtml;
+      button.disabled = false;
+    }
+
+    if (options.showProgress && progressContainer) {
+      setTimeout(() => {
+        progressContainer.style.display = 'none';
+      }, 2000);
+    }
+  }
+}
+
+async function exportSingleClip(index, buttonElement) {
+  if (!clips[index]) return;
+
+  if (processedClips.has(index)) {
+    addMessage(`クリップ ${index + 1} はすでに処理済みです`, 'info');
+    return;
+  }
+
+  await exportClipIndexes([index], {
+    button: buttonElement,
+    busyHtml: '保存中',
+    startMessage: `クリップ ${index + 1} を単体出力中...`,
+    successMessage: `クリップ ${index + 1} の単体出力が完了しました`
+  });
+}
+
+async function handleDownloadSegments() {
+  if (!clips || clips.length === 0 || !currentFilePath) {
+    addMessage('出力するクリップがありません', 'error');
+    return;
+  }
+
+  const exportIndexes = getCheckedExportIndexes();
+  if (exportIndexes.length === 0) {
+    addMessage(checkedClips.size === 0 ? '書き出すクリップをチェックしてください' : '処理済みを除くチェック済みクリップがありません', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('downloadSegmentsBtn');
+  isProcessing = true;
+
+  try {
+    await exportClipIndexes(exportIndexes, {
+      button: btn,
+      busyHtml: '書き出し中<span class="spinner"></span>',
+      startMessage: `FFmpegで${exportIndexes.length}個のチェック済みクリップを書き出し中...`,
+      successMessage: `${exportIndexes.length}個のチェック済みクリップを書き出しました`,
+      showProgress: true
+    });
+  } finally {
+    isProcessing = false;
+  }
+}
+
+function handleDeleteClip() {
+  if (checkedClips.size === 0) {
+    addMessage('削除するクリップをチェックしてください', 'error');
+    return;
+  }
+
+  saveState();
+  const toDelete = Array.from(checkedClips).sort((a, b) => b - a);
+  toDelete.forEach((index) => clips.splice(index, 1));
+  checkedClips.clear();
+  processedClips = remapIndexedSet(processedClips, toDelete);
+  selectedClipIndex = remapSelectedIndex(selectedClipIndex, toDelete);
+  renderClips();
+  updateClipList();
+  addMessage(toDelete.length + '個のクリップを削除しました', 'success');
+}
+
+function handleSelectAllClips() {
+  if (clips.length === 0) {
+    addMessage('クリップがありません', 'warning');
+    return;
+  }
+
+  saveState();
+  checkedClips.clear();
+  for (let i = 0; i < clips.length; i++) {
+    if (!processedClips.has(i)) {
+      checkedClips.add(i);
+    }
+  }
+
+  renderClips();
+  updateClipList();
+
+  if (checkedClips.size === 0) {
+    addMessage('未処理のクリップがありません', 'warning');
+    return;
+  }
+
+  addMessage(`${checkedClips.size}個の未処理クリップを全選択しました`, 'success');
 }
 
 function handleCanvasClick(e) {

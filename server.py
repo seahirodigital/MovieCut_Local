@@ -104,12 +104,7 @@ NO_CACHE_HEADERS = {
 active_connections: list[WebSocket] = []
 
 # 現在処理中のファイル情報を保持
-current_state = {
-    "file_path": None,
-    "duration": 0,
-    "waveform_data": None,
-    "detected_spikes": [],
-}
+analysis_state_by_file = {}
 
 
 # ===== ユーティリティ =====
@@ -137,6 +132,50 @@ def get_video_duration(file_path: str) -> float:
             return int(h) * 3600 + int(m) * 60 + float(s)
     
     raise ValueError("動画の長さを取得できませんでした")
+
+
+def get_analysis_state(file_path: str) -> dict:
+    state = analysis_state_by_file.get(file_path)
+    if state is None:
+        state = {
+            "duration": 0,
+            "waveform_data": None,
+            "detected_spikes": [],
+        }
+        analysis_state_by_file[file_path] = state
+    return state
+
+
+async def run_process_capture(cmd: list[str]) -> tuple[int, bytes, bytes]:
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    return process.returncode, stdout or b"", stderr or b""
+
+
+def build_waveform_data(raw_path: str, sample_rate: int, samples_per_second: int = 10) -> list[dict]:
+    raw_data = np.fromfile(raw_path, dtype=np.int16)
+    audio_data = raw_data.astype(np.float32) / 32768.0
+    samples_per_point = sample_rate // samples_per_second
+    total_points = len(audio_data) // samples_per_point
+
+    waveform = []
+    for i in range(total_points):
+        start = i * samples_per_point
+        end = min(start + samples_per_point, len(audio_data))
+        chunk = audio_data[start:end]
+        if len(chunk) > 0:
+            waveform.append({
+                "min": float(np.min(chunk)),
+                "max": float(np.max(chunk))
+            })
+        else:
+            waveform.append({"min": 0.0, "max": 0.0})
+
+    return waveform
 
 
 async def broadcast_progress(message: str, percent: float, msg_type: str = "progress"):
@@ -181,15 +220,16 @@ async def analyze_audio(file_path: str = Form(...)):
     try:
         # 動画の長さを取得
         duration = get_video_duration(file_path)
-        current_state["file_path"] = file_path
-        current_state["duration"] = duration
+        state = get_analysis_state(file_path)
+        state["duration"] = duration
         
         await broadcast_progress("音声抽出中...", 5)
         
         # FFmpegで音声をPCM (raw) として抽出
         # サンプリングレート8000Hzで十分（波形表示用）
         SAMPLE_RATE = 8000
-        wav_path = str(TEMP_DIR / "audio_temp.raw")
+        temp_fd, wav_path = tempfile.mkstemp(prefix="audio_", suffix=".raw", dir=str(TEMP_DIR))
+        os.close(temp_fd)
         
         cmd = [
             FFMPEG, "-y",
@@ -202,6 +242,58 @@ async def analyze_audio(file_path: str = Form(...)):
             wav_path
         ]
         
+        try:
+            returncode, _, stderr = await run_process_capture(cmd)
+            if returncode != 0:
+                error_text = stderr.decode("utf-8", errors="replace")
+                return JSONResponse({"error": f"髻ｳ螢ｰ謚ｽ蜃ｺ縺ｫ螟ｱ謨・ {error_text[:500]}"}, status_code=500)
+
+            await broadcast_progress("豕｢蠖｢繝・・繧ｿ險育ｮ嶺ｸｭ...", 40)
+            waveform = await asyncio.to_thread(build_waveform_data, wav_path, SAMPLE_RATE)
+            state["waveform_data"] = waveform
+
+            await broadcast_progress("隗｣譫仙ｮ御ｺ・", 100)
+
+            return JSONResponse({
+                "success": True,
+                "duration": duration,
+                "waveform": waveform,
+                "sample_rate": 10,
+                "total_points": len(waveform)
+            })
+        finally:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+
+        returncode, _, stderr = await run_process_capture(cmd)
+
+        if returncode != 0:
+            error_text = stderr.decode("utf-8", errors="replace")
+            results.append({
+                "clip": i + 1,
+                "success": False,
+                "error": error_text[:200]
+            })
+            await broadcast_progress(f"クリップ {i+1} でエラー発生", (i / len(clips)) * 100, "error")
+            return JSONResponse({"error": "legacy analyze path should not run"}, status_code=500)
+
+        file_size = os.path.getsize(output_path)
+        results.append({
+            "clip": i + 1,
+            "success": True,
+            "path": output_path,
+            "filename": output_filename,
+            "size_mb": round(file_size / (1024 * 1024), 2)
+        })
+        await broadcast_progress(
+            f"繧ｯ繝ｪ繝・・ {i+1} 螳御ｺ・({output_filename})",
+            ((i + 1) / len(clips)) * 100,
+            "clip_done"
+        )
+        return JSONResponse({"error": "legacy analyze path should not run"}, status_code=500)
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -275,13 +367,15 @@ async def detect_spikes(
     音量継続検出 API
     閾値(X)以上の音が、指定秒数(Y)維持されたポイントを検出してZ秒切り出す
     """
-    if current_state["waveform_data"] is None or current_state["file_path"] != file_path:
+    state = get_analysis_state(file_path)
+    if state["waveform_data"] is None:
         resp = await analyze_audio(file_path)
         if hasattr(resp, 'status_code') and resp.status_code != 200:
             return resp
+        state = get_analysis_state(file_path)
     
-    waveform = current_state["waveform_data"]
-    duration = current_state["duration"]
+    waveform = state["waveform_data"]
+    duration = state["duration"]
     
     if not waveform:
         return JSONResponse({"error": "波形データがありません"}, status_code=400)
@@ -328,7 +422,7 @@ async def detect_spikes(
             progress = 10 + (i / len(waveform)) * 80
             await broadcast_progress(f"検出中... {i}/{len(waveform)}", progress)
     
-    current_state["detected_spikes"] = spike_moments
+    state["detected_spikes"] = spike_moments
     
     # クリップを生成
     clips = []
@@ -473,6 +567,99 @@ async def export_clips(
     })
 
 
+@app.post("/api/export-clips-async")
+async def export_clips_async(
+    file_path: str = Form(...),
+    clips_json: str = Form(...),
+    output_dir: str = Form(""),
+    fps: int = Form(30),
+    video_bitrate: int = Form(4500),
+    audio_bitrate: int = Form(128),
+):
+    if not os.path.exists(file_path):
+        return JSONResponse({"error": f"ファイルが見つかりません: {file_path}"}, status_code=400)
+
+    clips = json.loads(clips_json)
+    if not clips:
+        return JSONResponse({"error": "クリップがありません"}, status_code=400)
+
+    if not output_dir or not os.path.isdir(output_dir):
+        output_dir = str(Path(file_path).parent)
+
+    results = []
+
+    for i, clip in enumerate(clips):
+        start = clip["start"]
+        end = clip["end"]
+        duration_sec = end - start
+
+        await broadcast_progress(
+            f"クリップ {i+1}/{len(clips)} を書き出し中... ({format_time(start)} → {format_time(end)})",
+            (i / len(clips)) * 100
+        )
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        start_sec = int(start)
+        end_sec = int(end)
+        output_filename = f"{timestamp}_{start_sec:02d}-{end_sec:02d}.mp4"
+        output_path = os.path.join(output_dir, output_filename)
+
+        cmd = [
+            FFMPEG, "-y",
+            "-ss", str(start),
+            "-i", file_path,
+            "-t", str(duration_sec),
+            "-c:v", "libx264",
+            "-profile:v", "high",
+            "-level", "4.2",
+            "-preset", "veryslow",
+            "-pix_fmt", "yuv420p",
+            "-b:v", f"{video_bitrate}k",
+            "-maxrate", f"{video_bitrate}k",
+            "-bufsize", f"{video_bitrate*2}k",
+            "-r", str(fps),
+            "-c:a", "aac",
+            "-b:a", f"{audio_bitrate}k",
+            "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero",
+            output_path
+        ]
+
+        returncode, _, stderr = await run_process_capture(cmd)
+
+        if returncode != 0:
+            error_text = stderr.decode("utf-8", errors="replace")
+            results.append({
+                "clip": i + 1,
+                "success": False,
+                "error": error_text[:200]
+            })
+            await broadcast_progress(f"クリップ {i+1} でエラー発生", (i / len(clips)) * 100, "error")
+            continue
+
+        file_size = os.path.getsize(output_path)
+        results.append({
+            "clip": i + 1,
+            "success": True,
+            "path": output_path,
+            "filename": output_filename,
+            "size_mb": round(file_size / (1024 * 1024), 2)
+        })
+        await broadcast_progress(
+            f"クリップ {i+1} 完了 ({output_filename})",
+            ((i + 1) / len(clips)) * 100,
+            "clip_done"
+        )
+
+    await broadcast_progress("全クリップの書き出しが完了しました!", 100)
+
+    return JSONResponse({
+        "success": True,
+        "results": results,
+        "output_dir": output_dir
+    })
+
+
 @app.post("/api/compress")
 async def compress_video(
     file_path: str = Form(...),
@@ -546,19 +733,19 @@ async def compress_video(
     await broadcast_progress("圧縮開始...", 10)
     
     # 進捗を取得しながら実行
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        encoding="utf-8",
-        errors="replace"
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     
     # 進捗解析 (stdoutの progress出力を解析)
     if process.stdout:
-        for line in process.stdout:
-            line = line.strip()
+        while True:
+            raw_line = await process.stdout.readline()
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace").strip()
             if line.startswith("out_time_ms="):
                 try:
                     out_time_us = int(line.split("=")[1])
@@ -572,8 +759,13 @@ async def compress_video(
                 except (ValueError, ZeroDivisionError):
                     pass
     
-    process.wait()
+    await process.wait()
     
+    if process.returncode != 0:
+        stderr_bytes = await process.stderr.read() if process.stderr else b""
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else "荳肴・縺ｪ繧ｨ繝ｩ繝ｼ"
+        return JSONResponse({"error": f"蝨ｧ邵ｮ縺ｫ螟ｱ謨・ {stderr_text[:500]}"}, status_code=500)
+
     if process.returncode != 0:
         stderr_text = process.stderr.read() if process.stderr else "不明なエラー"
         return JSONResponse({"error": f"圧縮に失敗: {stderr_text[:500]}"}, status_code=500)
