@@ -14,6 +14,8 @@ import asyncio
 import tempfile
 import subprocess
 import time
+import threading
+import shutil
 import wave
 from pathlib import Path
 from typing import Optional
@@ -21,7 +23,7 @@ from typing import Optional
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -72,11 +74,11 @@ def find_ffprobe():
 FFMPEG = find_ffmpeg()
 FFPROBE = find_ffprobe()
 
-print(f"✅ FFmpeg: {FFMPEG}")
+print(f"[OK] FFmpeg: {FFMPEG}")
 if FFPROBE:
-    print(f"✅ FFprobe: {FFPROBE}")
+    print(f"[OK] FFprobe: {FFPROBE}")
 else:
-    print("⚠️ FFprobeが見つかりません（一部機能が制限されます）")
+    print("[WARN] FFprobeが見つかりません（一部機能が制限されます）")
 
 # ===== FastAPI アプリケーション =====
 app = FastAPI(title="Movie AutoCut Backend")
@@ -99,12 +101,18 @@ NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+REVIEW_REJECT_DIR = Path(r"C:\Users\HCY\Downloads\Jinricp\削除")
+REVIEW_REJECT_FAILURE_LOG = TEMP_DIR / "review_reject_move_failures.log"
 
 # WebSocket接続の管理
 active_connections: list[WebSocket] = []
 
 # 現在処理中のファイル情報を保持
 analysis_state_by_file = {}
+active_video_stream_counts: dict[str, int] = {}
+video_stream_lock = threading.Lock()
+queued_review_reject_tasks: dict[str, asyncio.Task] = {}
+review_reject_task_lock = threading.Lock()
 
 
 # ===== ユーティリティ =====
@@ -144,6 +152,122 @@ def get_analysis_state(file_path: str) -> dict:
         }
         analysis_state_by_file[file_path] = state
     return state
+
+
+def build_unique_destination_path(destination_dir: Path, original_name: str) -> Path:
+    candidate = destination_dir / original_name
+    if not candidate.exists():
+        return candidate
+
+    stem = Path(original_name).stem
+    suffix = Path(original_name).suffix
+    counter = 1
+    while True:
+        candidate = destination_dir / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def append_review_reject_failure(source_path: str, error_message: str):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    with REVIEW_REJECT_FAILURE_LOG.open("a", encoding="utf-8") as log_file:
+        log_file.write(
+            f"[{timestamp}] {source_path} -> {REVIEW_REJECT_DIR}\n"
+            f"{error_message}\n\n"
+        )
+
+
+def normalize_managed_path(file_path: str | Path) -> str:
+    return str(Path(file_path).resolve())
+
+
+def increment_active_video_stream(file_path: str | Path):
+    normalized_path = normalize_managed_path(file_path)
+    with video_stream_lock:
+        active_video_stream_counts[normalized_path] = active_video_stream_counts.get(normalized_path, 0) + 1
+
+
+def decrement_active_video_stream(file_path: str | Path):
+    normalized_path = normalize_managed_path(file_path)
+    with video_stream_lock:
+        current_count = active_video_stream_counts.get(normalized_path, 0)
+        if current_count <= 1:
+            active_video_stream_counts.pop(normalized_path, None)
+        else:
+            active_video_stream_counts[normalized_path] = current_count - 1
+
+
+def get_active_video_stream_count(file_path: str | Path) -> int:
+    normalized_path = normalize_managed_path(file_path)
+    with video_stream_lock:
+        return active_video_stream_counts.get(normalized_path, 0)
+
+
+async def wait_for_video_release(file_path: str | Path, timeout_sec: float = 2.5, poll_interval_sec: float = 0.08) -> int:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        active_count = get_active_video_stream_count(file_path)
+        if active_count <= 0:
+            return 0
+        await asyncio.sleep(poll_interval_sec)
+    return get_active_video_stream_count(file_path)
+
+
+async def process_review_reject_move(file_path: str):
+    normalized_path = normalize_managed_path(file_path)
+    source_path = Path(normalized_path)
+    last_error = None
+
+    try:
+        REVIEW_REJECT_DIR.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + 45.0
+
+        while time.monotonic() < deadline:
+            if not source_path.exists():
+                return
+
+            active_count = await wait_for_video_release(source_path, timeout_sec=0.8, poll_interval_sec=0.08)
+            if active_count > 0:
+                last_error = RuntimeError(f"動画配信ストリームが {active_count} 件残っています")
+                await asyncio.sleep(0.25)
+                continue
+
+            try:
+                destination_path = build_unique_destination_path(REVIEW_REJECT_DIR, source_path.name)
+                await asyncio.to_thread(shutil.move, str(source_path), str(destination_path))
+                analysis_state_by_file.pop(str(source_path), None)
+                analysis_state_by_file.pop(normalized_path, None)
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as e:
+                last_error = e
+                await asyncio.sleep(0.25)
+            except OSError as e:
+                last_error = e
+                await asyncio.sleep(0.25)
+
+        append_review_reject_failure(
+            normalized_path,
+            str(last_error or "削除フォルダへの移動がタイムアウトしました"),
+        )
+    finally:
+        with review_reject_task_lock:
+            queued_review_reject_tasks.pop(normalized_path, None)
+
+
+def queue_review_reject_move(file_path: str | Path) -> str:
+    normalized_path = normalize_managed_path(file_path)
+    with review_reject_task_lock:
+        existing_task = queued_review_reject_tasks.get(normalized_path)
+        if existing_task and not existing_task.done():
+            return "already_queued"
+
+        queued_review_reject_tasks[normalized_path] = asyncio.create_task(
+            process_review_reject_move(normalized_path)
+        )
+    return "queued"
 
 
 async def run_process_capture(cmd: list[str]) -> tuple[int, bytes, bytes]:
@@ -205,6 +329,20 @@ async def serve_html():
 async def serve_app_js():
     """メインJavaScriptファイルを配信"""
     js_path = BASE_DIR / "app.js"
+    return FileResponse(js_path, media_type="application/javascript", headers=NO_CACHE_HEADERS.copy())
+
+
+@app.get("/review")
+async def serve_review_html():
+    """高速判定ページを配信"""
+    html_path = BASE_DIR / "review.html"
+    return FileResponse(html_path, media_type="text/html", headers=NO_CACHE_HEADERS.copy())
+
+
+@app.get("/review.js")
+async def serve_review_js():
+    """高速判定ページ用のJavaScriptを配信"""
+    js_path = BASE_DIR / "review.js"
     return FileResponse(js_path, media_type="application/javascript", headers=NO_CACHE_HEADERS.copy())
 
 
@@ -853,6 +991,39 @@ async def dialog_open_file():
         return JSONResponse({"success": False, "path": ""})
 
 
+@app.get("/api/dialog/open-files")
+async def dialog_open_files():
+    """ネイティブの複数ファイル選択ダイアログを開き、選択された動画パス一覧を返す"""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.lift()
+        root.attributes("-topmost", True)
+
+        file_paths = filedialog.askopenfilenames(
+            title="判定する動画ファイルを複数選択",
+            filetypes=[
+                ("動画ファイル", "*.mp4 *.mov *.avi *.mkv *.wmv *.flv *.webm *.m4v *.ts *.mts"),
+                ("すべてのファイル", "*.*"),
+            ]
+        )
+
+        normalized_paths = [path.replace("/", "\\") for path in file_paths if path]
+        return JSONResponse({
+            "success": len(normalized_paths) > 0,
+            "paths": normalized_paths,
+        })
+    except Exception as e:
+        return JSONResponse({"success": False, "paths": [], "error": str(e)}, status_code=500)
+    finally:
+        if root is not None:
+            root.destroy()
+
+
 @app.get("/api/dialog/open-directory")
 async def dialog_open_directory():
     """ネイティブのフォルダ選択ダイアログを開き、選択されたパスを返す"""
@@ -884,6 +1055,39 @@ async def dialog_open_directory():
             root.destroy()
 
 
+@app.post("/api/delete-file")
+async def delete_file(file_path: str = Form(...)):
+    """指定された動画ファイルを削除フォルダ移動キューへ登録する"""
+    path = Path(file_path)
+
+    if path.exists() and not path.is_file():
+        return JSONResponse({"error": f"ファイルではありません: {file_path}"}, status_code=400)
+
+    REVIEW_REJECT_DIR.mkdir(parents=True, exist_ok=True)
+    normalized_path = normalize_managed_path(path)
+
+    if not path.exists():
+        return JSONResponse({
+            "success": True,
+            "already_missing": True,
+            "queued": False,
+            "queue_state": "already_missing",
+            "moved_from_path": normalized_path,
+            "target_directory": str(REVIEW_REJECT_DIR),
+            "moved_name": path.name,
+        })
+
+    queue_state = queue_review_reject_move(path)
+    return JSONResponse({
+        "success": True,
+        "queued": True,
+        "queue_state": queue_state,
+        "moved_from_path": normalized_path,
+        "target_directory": str(REVIEW_REJECT_DIR),
+        "moved_name": path.name,
+    })
+
+
 # ===== WebSocket エンドポイント =====
 
 @app.websocket("/ws/progress")
@@ -907,7 +1111,6 @@ async def websocket_progress(websocket: WebSocket):
 
 
 from fastapi import Request
-from fastapi.responses import StreamingResponse
 
 # ===== 動画ファイルの配信（ブラウザでの再生用） =====
 
@@ -916,65 +1119,74 @@ async def serve_video(path: str, request: Request):
     """動画ファイルをストリーム配信（Range対応で大容量動画のシークを高速化）"""
     if not os.path.exists(path):
         return JSONResponse({"error": "ファイルが見つかりません"}, status_code=404)
-    
-    file_size = os.path.getsize(path)
+
+    file_path = Path(path)
+    normalized_path = normalize_managed_path(file_path)
+    file_size = os.path.getsize(file_path)
     range_header = request.headers.get("Range")
-    
-    if range_header:
-        byte_range = range_header.replace("bytes=", "").split("-")
-        start = int(byte_range[0])
-        end = int(byte_range[1]) if byte_range[1] else file_size - 1
-        
-        chunk_size = end - start + 1
-        
-        def file_iterator():
-            with open(path, "rb") as f:
+    base_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
+    increment_active_video_stream(normalized_path)
+    try:
+        if range_header:
+            try:
+                range_value = range_header.replace("bytes=", "", 1)
+                start_text, end_text = range_value.split("-", 1)
+                start = int(start_text) if start_text else 0
+                end = int(end_text) if end_text else file_size - 1
+                start = max(0, min(start, file_size - 1))
+                end = max(start, min(end, file_size - 1))
+            except Exception:
+                return JSONResponse({"error": "無効なRangeヘッダーです"}, status_code=416)
+
+            chunk_size = end - start + 1
+            with open(file_path, "rb") as f:
                 f.seek(start)
-                bytes_read = 0
-                while bytes_read < chunk_size:
-                    read_size = min(1024 * 1024, chunk_size - bytes_read)  # 1MB chunks
-                    data = f.read(read_size)
-                    if not data:
-                        break
-                    bytes_read += len(data)
-                    yield data
-                    
-        headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(chunk_size),
-        }
-        return StreamingResponse(
-            file_iterator(),
-            status_code=206,
+                chunk = f.read(chunk_size)
+
+            headers = base_headers.copy()
+            headers.update({
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(len(chunk)),
+            })
+            return Response(
+                content=chunk,
+                status_code=206,
+                headers=headers,
+                media_type="video/mp4",
+            )
+
+        with open(file_path, "rb") as f:
+            data = f.read()
+
+        headers = base_headers.copy()
+        headers["Content-Length"] = str(len(data))
+        return Response(
+            content=data,
             headers=headers,
-            media_type="video/mp4"
-        )
-    else:
-        return FileResponse(
-            path,
             media_type="video/mp4",
-            headers={"Accept-Ranges": "bytes"}
         )
+    finally:
+        decrement_active_video_stream(normalized_path)
 
 
 # ===== メインエントリーポイント =====
 
 if __name__ == "__main__":
-    import webbrowser
-    
     HOST = "127.0.0.1"
     PORT = 8765
     
     print("=" * 60)
-    print("🎬 Movie AutoCut - Python Backend Server")
+    print("Movie AutoCut - Python Backend Server")
     print("=" * 60)
-    print(f"📡 サーバーアドレス: http://{HOST}:{PORT}")
-    print(f"📂 作業ディレクトリ: {BASE_DIR}")
-    print(f"🔧 FFmpeg: {FFMPEG}")
+    print(f"Server URL: http://{HOST}:{PORT}")
+    print(f"Work Directory: {BASE_DIR}")
+    print(f"FFmpeg: {FFMPEG}")
     print("=" * 60)
-    
-    # ブラウザを自動で開く
-    webbrowser.open(f"http://{HOST}:{PORT}")
-    
+
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")

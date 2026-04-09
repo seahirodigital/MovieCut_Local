@@ -22,6 +22,10 @@
       padding: 14px
     }
 
+    body.side-panel-open {
+      overflow: hidden
+    }
+
     .container {
       width: min(90vw, 2400px);
       max-width: none;
@@ -72,13 +76,22 @@
       justify-content: space-between
     }
 
-    .top-analyze-btn {
+    .top-action-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px
+    }
+
+    .top-action-btn {
       width: 100%;
       min-height: 58px;
       margin: 0 !important;
       display: flex;
       align-items: center;
-      justify-content: center
+      justify-content: center;
+      padding: 10px;
+      font-size: 0.92rem;
+      white-space: nowrap
     }
 
     .top-progress {
@@ -110,6 +123,151 @@
 
     .settings-fab.active {
       box-shadow: 0 0 0 3px rgba(192, 132, 252, 0.35), 0 18px 34px rgba(15, 23, 42, 0.52)
+    }
+
+    .menu-fab {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      width: 54px;
+      height: 54px;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.92);
+      color: #f8fafc;
+      font-size: 1.45rem;
+      cursor: pointer;
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.45);
+      z-index: 340;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease
+    }
+
+    .menu-fab:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 18px 34px rgba(15, 23, 42, 0.52);
+      background: rgba(30, 41, 59, 0.96)
+    }
+
+    .menu-fab.active {
+      box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.28), 0 18px 34px rgba(15, 23, 42, 0.52)
+    }
+
+    .side-panel-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.55);
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 320
+    }
+
+    .side-panel-overlay.open {
+      opacity: 1;
+      pointer-events: auto
+    }
+
+    .side-panel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: min(360px, 86vw);
+      height: 100vh;
+      padding: 26px 20px 22px;
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
+      border-right: 1px solid rgba(148, 163, 184, 0.22);
+      box-shadow: 26px 0 60px rgba(2, 6, 23, 0.42);
+      transform: translateX(-105%);
+      transition: transform 0.26s ease;
+      z-index: 330;
+      display: flex;
+      flex-direction: column;
+      gap: 18px
+    }
+
+    .side-panel.open {
+      transform: translateX(0)
+    }
+
+    .side-panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px
+    }
+
+    .side-panel-title {
+      font-size: 1.2rem;
+      color: #f8fafc;
+      font-weight: 700;
+      margin-bottom: 6px
+    }
+
+    .side-panel-subtitle {
+      color: #94a3b8;
+      font-size: 0.86rem;
+      line-height: 1.5
+    }
+
+    .side-panel-close {
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.72);
+      color: #e2e8f0;
+      cursor: pointer;
+      font-size: 1rem
+    }
+
+    .side-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 10px
+    }
+
+    .side-nav-btn {
+      display: block;
+      width: 100%;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.72);
+      color: #e2e8f0;
+      padding: 14px 16px;
+      text-align: left;
+      text-decoration: none;
+      cursor: pointer;
+      font-weight: 700;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease
+    }
+
+    .side-nav-btn:hover {
+      transform: translateX(3px);
+      background: rgba(30, 41, 59, 0.92)
+    }
+
+    .side-nav-btn.active {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.96) 0%, rgba(14, 165, 233, 0.94) 100%);
+      border-color: rgba(125, 211, 252, 0.58);
+      color: #eff6ff;
+      box-shadow: 0 14px 30px rgba(14, 165, 233, 0.16)
+    }
+
+    .side-panel-note {
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.56);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      color: #cbd5e1;
+      font-size: 0.84rem;
+      line-height: 1.65
+    }
+
+    .side-panel-note strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #f8fafc
     }
 
     .title {
@@ -522,6 +680,11 @@
       border-color: #22c55e
     }
 
+    .segment-marker.approved:not(.checked):not(.playback-active) {
+      background: rgba(14, 165, 233, 0.36);
+      border-color: #38bdf8
+    }
+
     .segment-marker.playback-active {
       background: rgba(239, 68, 68, 0.45);
       border-color: #ef4444;
@@ -652,6 +815,11 @@
       background: linear-gradient(180deg, rgba(148, 163, 184, 0.12), rgba(15, 23, 42, 0.96))
     }
 
+    .clip-item.approved:not(.playback-active) {
+      border-color: rgba(14, 165, 233, 0.62);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.24)
+    }
+
     .clip-checkbox {
       grid-area: checkbox;
       width: 18px;
@@ -708,6 +876,21 @@
       background: rgba(148, 163, 184, 0.18);
       border: 1px solid rgba(148, 163, 184, 0.35);
       color: #e2e8f0;
+      font-size: 0.68rem;
+      font-weight: 700
+    }
+
+    .review-ok-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      height: 22px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(14, 165, 233, 0.18);
+      border: 1px solid rgba(56, 189, 248, 0.42);
+      color: #bae6fd;
       font-size: 0.68rem;
       font-weight: 700
     }
@@ -804,6 +987,179 @@
       filter: saturate(0.7)
     }
 
+    .workspace-mode-bar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 20px
+    }
+
+    .workspace-mode-bar .section-title {
+      margin-bottom: 8px
+    }
+
+    .workspace-mode-text {
+      color: #94a3b8;
+      font-size: 0.92rem;
+      max-width: 780px
+    }
+
+    .workspace-mode-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      color: #e2e8f0;
+      font-weight: 700;
+      white-space: nowrap
+    }
+
+    .review-workspace {
+      margin-top: 18px
+    }
+
+    .review-panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 14px
+    }
+
+    .review-summary {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap
+    }
+
+    .review-summary-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.72);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      color: #e2e8f0;
+      font-size: 0.78rem;
+      font-weight: 700
+    }
+
+    .review-carousel-shell {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: stretch
+    }
+
+    .review-nav-btn {
+      width: 48px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.76);
+      color: #f8fafc;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: transform 0.2s ease, background 0.2s ease
+    }
+
+    .review-nav-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      background: rgba(30, 41, 59, 0.94)
+    }
+
+    .review-nav-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed
+    }
+
+    .review-carousel {
+      display: flex;
+      gap: 16px;
+      overflow-x: auto;
+      padding: 8px 4px 12px;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth
+    }
+
+    .review-carousel::-webkit-scrollbar {
+      height: 10px
+    }
+
+    .review-carousel::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.4);
+      border-radius: 999px
+    }
+
+    .review-clip-card {
+      flex: 0 0 min(420px, calc(100vw - 190px));
+      min-width: 320px;
+      min-height: 182px;
+      scroll-snap-align: center
+    }
+
+    .review-card-index {
+      grid-area: checkbox;
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      background: rgba(59, 130, 246, 0.22);
+      border: 1px solid rgba(96, 165, 250, 0.42);
+      color: #dbeafe;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem
+    }
+
+    .review-card-actions {
+      grid-area: actions;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end
+    }
+
+    .review-action-btn {
+      height: 30px;
+      padding: 0 12px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #fff
+    }
+
+    .review-action-btn.ok {
+      background: #10b981
+    }
+
+    .review-action-btn.delete {
+      background: #ef4444
+    }
+
+    .review-empty {
+      min-height: 160px;
+      border-radius: 14px;
+      border: 1px dashed rgba(148, 163, 184, 0.3);
+      background: rgba(15, 23, 42, 0.4);
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center
+    }
+
     @media (max-width: 1700px) {
       .clip-list {
         grid-template-columns: repeat(4, minmax(0, 1fr))
@@ -839,6 +1195,45 @@
 
       .top-control-grid {
         grid-template-columns: 1fr
+      }
+
+      .top-action-btn {
+        min-height: 54px;
+        font-size: 0.88rem
+      }
+
+      .menu-fab {
+        top: 12px;
+        left: 12px;
+        width: 48px;
+        height: 48px
+      }
+
+      .settings-fab {
+        top: 12px;
+        right: 12px;
+        width: 48px;
+        height: 48px
+      }
+
+      .side-panel {
+        width: min(320px, 92vw);
+        padding: 20px 16px 18px
+      }
+
+      .review-carousel-shell {
+        grid-template-columns: 1fr;
+        gap: 10px
+      }
+
+      .review-nav-btn {
+        width: 100%;
+        min-height: 42px
+      }
+
+      .review-clip-card {
+        flex-basis: min(360px, calc(100vw - 44px));
+        min-width: 280px
       }
 
       .video-container {
@@ -944,8 +1339,28 @@
 </head>
 
 <body>
+  <button id="navMenuBtn" class="menu-fab" type="button" title="ナビゲーションを開く" aria-controls="sidePanel"
+    aria-expanded="false">☰</button>
   <button id="settingsToggleBtn" class="settings-fab" type="button" title="自動検出詳細設定を開閉" aria-controls="autoDetectSection"
     aria-expanded="false">⚙</button>
+  <div id="sidePanelOverlay" class="side-panel-overlay" hidden></div>
+  <aside id="sidePanel" class="side-panel" aria-hidden="true">
+    <div class="side-panel-header">
+      <div>
+        <div class="side-panel-title">ワークスペース切替</div>
+        <div class="side-panel-subtitle">既存の編集ビューと、高速で要不要を判定するレビュー画面を切り替えます。</div>
+      </div>
+      <button id="sidePanelCloseBtn" class="side-panel-close" type="button" title="閉じる">✕</button>
+    </div>
+    <div class="side-nav">
+      <a class="side-nav-btn active" href="/">✂️ 通常編集</a>
+      <a class="side-nav-btn" href="/review">⚡ 高速判定</a>
+    </div>
+    <div class="side-panel-note">
+      <strong>高速判定の使い方</strong>
+      OK で次カードへ移動、✕ で削除、左右の矢印でカードをスキップできます。再生ボタン、波形スライダー、タイムライン編集、既存ショートカットはそのまま使えます。
+    </div>
+  </aside>
 
   <div class="container">
     <header class="header">
@@ -969,8 +1384,11 @@
         </div>
       </div>
       <div class="top-control-card top-action-card">
-        <label style="margin-bottom:4px;color:#d1d5db;font-size:0.9rem;">🔍 自動検出</label>
-        <button id="analyzeBtn" class="btn btn-process top-analyze-btn" style="padding:10px;font-size:1rem">🔍 自動検出</button>
+        <label style="margin-bottom:4px;color:#d1d5db;font-size:0.9rem;">⚙️ 自動処理</label>
+        <div class="top-action-row">
+          <button id="analyzeBtn" class="btn btn-process top-action-btn" type="button">🔍 自動検出</button>
+          <button id="autoExportBtn" class="btn btn-secondary top-action-btn" type="button">🎬 自動出力</button>
+        </div>
       </div>
     </div>
     <div id="serverStatus" style="margin-bottom:15px;padding:10px;border-radius:8px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;font-size:0.9rem;display:none;">⚠️ サーバーに接続できません。server.pyを起動してください。</div>

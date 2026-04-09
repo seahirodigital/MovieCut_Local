@@ -38,6 +38,9 @@ let playbackSpeed = 1.0;
 let clipSliderSyncFrame = null;
 let clipPlaybackMonitor = null;
 let currentPlaybackClipIndex = -1;
+let currentWorkspaceMode = 'editor';
+let reviewApprovedClips = new Set();
+let isSidePanelOpen = false;
 
 // 圧縮機能用
 let compressVideoDuration = 0;
@@ -156,6 +159,91 @@ function toggleAutoDetectSettings(forceOpen) {
   }
 }
 
+function toggleSidePanel(forceOpen) {
+  const navMenuBtn = document.getElementById('navMenuBtn');
+  const sidePanel = document.getElementById('sidePanel');
+  const sidePanelOverlay = document.getElementById('sidePanelOverlay');
+  if (!navMenuBtn || !sidePanel || !sidePanelOverlay) return;
+
+  const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : !isSidePanelOpen;
+  isSidePanelOpen = shouldOpen;
+
+  if (shouldOpen) {
+    sidePanelOverlay.hidden = false;
+    requestAnimationFrame(() => {
+      sidePanel.classList.add('open');
+      sidePanelOverlay.classList.add('open');
+      navMenuBtn.classList.add('active');
+    });
+  } else {
+    sidePanel.classList.remove('open');
+    sidePanelOverlay.classList.remove('open');
+    navMenuBtn.classList.remove('active');
+    window.setTimeout(() => {
+      if (!isSidePanelOpen) {
+        sidePanelOverlay.hidden = true;
+      }
+    }, 260);
+  }
+
+  navMenuBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  sidePanel.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+  document.body.classList.toggle('side-panel-open', shouldOpen);
+}
+
+function updateWorkspaceModeUI() {
+  const clipEditSection = document.getElementById('clipEditSection');
+  const reviewSection = document.getElementById('reviewSection');
+  const workspaceModeBadge = document.getElementById('workspaceModeBadge');
+  const workspaceModeDescription = document.getElementById('workspaceModeDescription');
+  const sideNavButtons = document.querySelectorAll('.side-nav-btn[data-view-mode]');
+  const isReviewMode = currentWorkspaceMode === 'review';
+
+  if (clipEditSection) {
+    clipEditSection.hidden = isReviewMode;
+  }
+  if (reviewSection) {
+    reviewSection.hidden = !isReviewMode;
+  }
+  if (workspaceModeBadge) {
+    workspaceModeBadge.textContent = isReviewMode ? '高速判定' : 'メイン編集';
+  }
+  if (workspaceModeDescription) {
+    workspaceModeDescription.textContent = isReviewMode
+      ? '横スクロールの判定カードで OK / 削除 を高速に振り分けるビューです。'
+      : '既存のクリップ編集と一括出力を行う通常ビューです。';
+  }
+
+  sideNavButtons.forEach((button) => {
+    button.classList.toggle('active', button.dataset.viewMode === currentWorkspaceMode);
+  });
+}
+
+function setWorkspaceMode(mode, options = {}) {
+  if (mode !== 'editor' && mode !== 'review') return;
+
+  currentWorkspaceMode = mode;
+  updateWorkspaceModeUI();
+  updateReviewClipList();
+
+  if (mode === 'review' && clips.length > 0) {
+    const targetIndex = selectedClipIndex >= 0 && clips[selectedClipIndex] ? selectedClipIndex : 0;
+    focusReviewClip(targetIndex, {
+      syncVideo: options.syncVideo !== false,
+      scrollReview: true,
+      behavior: options.behavior || 'smooth'
+    });
+  }
+
+  if (options.closePanel !== false) {
+    toggleSidePanel(false);
+  }
+
+  if (!options.silent) {
+    addMessage(mode === 'review' ? '高速判定ビューに切り替えました' : 'メイン編集ビューに切り替えました', 'info');
+  }
+}
+
 
 // ===== 初期化 =====
 function init() {
@@ -184,8 +272,13 @@ function init() {
   const filePathInput = document.getElementById('filePathInput');
   const outputDirInput = document.getElementById('outputDirInput');
   const browseOutputDirBtn = document.getElementById('browseOutputDirBtn');
+  const navMenuBtn = document.getElementById('navMenuBtn');
+  const sidePanelCloseBtn = document.getElementById('sidePanelCloseBtn');
+  const sidePanelOverlay = document.getElementById('sidePanelOverlay');
   const settingsToggleBtn = document.getElementById('settingsToggleBtn');
   const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+  const reviewPrevBtn = document.getElementById('reviewPrevBtn');
+  const reviewNextBtn = document.getElementById('reviewNextBtn');
 
   filePathInput.title = 'ダブルクリックでエクスプローラーを開く';
   outputDirInput.title = 'ダブルクリックでフォルダを選択';
@@ -207,11 +300,31 @@ function init() {
   if (browseOutputDirBtn) {
     browseOutputDirBtn.addEventListener('click', openOutputDirectoryDialog);
   }
+  if (navMenuBtn) {
+    navMenuBtn.addEventListener('click', () => toggleSidePanel());
+  }
+  if (sidePanelCloseBtn) {
+    sidePanelCloseBtn.addEventListener('click', () => toggleSidePanel(false));
+  }
+  if (sidePanelOverlay) {
+    sidePanelOverlay.addEventListener('click', () => toggleSidePanel(false));
+  }
   if (settingsToggleBtn) {
     settingsToggleBtn.addEventListener('click', () => toggleAutoDetectSettings());
   }
   if (closeSettingsBtn) {
     closeSettingsBtn.addEventListener('click', () => toggleAutoDetectSettings(false));
+  }
+  document.querySelectorAll('.side-nav-btn[data-view-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setWorkspaceMode(button.dataset.viewMode);
+    });
+  });
+  if (reviewPrevBtn) {
+    reviewPrevBtn.addEventListener('click', () => moveReviewFocus(-1));
+  }
+  if (reviewNextBtn) {
+    reviewNextBtn.addEventListener('click', () => moveReviewFocus(1));
   }
 
   // ファイル読み込みボタン
@@ -223,6 +336,7 @@ function init() {
   // 自動検出設定
   document.getElementById('loudThreshold').addEventListener('input', updateThresholdDisplays);
   document.getElementById('analyzeBtn').addEventListener('click', handleAnalyze);
+  document.getElementById('autoExportBtn').addEventListener('click', handleAutoExport);
 
   // クリップ操作
   document.getElementById('downloadSegmentsBtn').addEventListener('click', handleDownloadSegments);
@@ -286,6 +400,9 @@ function init() {
     addMessage('波形スケールをリセットしました', 'success');
   });
 
+  updateWorkspaceModeUI();
+  updateReviewClipList();
+
   addMessage('Movie_AutoCut (Python Backend) へようこそ', 'info');
   addMessage('📂 動画ファイルのパスを入力して「読み込み」を押してください', 'info');
   addMessage('💡 保存先は動画と同じフォルダが初期設定です', 'info');
@@ -308,6 +425,7 @@ async function handleFileLoad() {
   clips = [];
   checkedClips.clear();
   processedClips.clear();
+  reviewApprovedClips.clear();
   selectedClipIndex = -1;
   clearClipPlaybackMonitor();
   detectedSpikes = [];
@@ -455,44 +573,135 @@ async function detectSpikesFromServer(filePath) {
   }
 }
 
+function setTopActionButtonsDisabled(disabled) {
+  ['analyzeBtn', 'autoExportBtn'].forEach((buttonId) => {
+    const button = document.getElementById(buttonId);
+    if (button) {
+      button.disabled = disabled;
+    }
+  });
+}
+
+function applyDetectedClips(data) {
+  if (!data || !Array.isArray(data.clips)) {
+    return false;
+  }
+
+  clips = data.clips.map((clip) => ({ start: clip.start, end: clip.end }));
+  checkedClips.clear();
+  processedClips.clear();
+  reviewApprovedClips.clear();
+  selectedClipIndex = -1;
+
+  addMessage(`${clips.length}個のクリップを作成しました`, 'success');
+
+  renderClips();
+  updateClipList();
+
+  document.getElementById('downloadSegmentsBtn').style.display = 'inline-block';
+  document.getElementById('clipEditSection').style.display = 'block';
+
+  if (currentWorkspaceMode === 'review' && clips.length > 0) {
+    selectedClipIndex = 0;
+    if (videoElement) {
+      videoElement.currentTime = clips[0].start;
+    }
+    renderClips();
+    updateClipList();
+    requestAnimationFrame(() => scrollReviewCardIntoView(0, 'auto'));
+  }
+  return true;
+}
+
 
 // ===== 自動検出ボタン（handleAnalyze） =====
 async function handleAnalyze() {
+  if (isProcessing) {
+    addMessage('書き出し中は自動検出を開始できません', 'warning');
+    return;
+  }
+
   if (!currentFilePath) {
     addMessage('先に動画ファイルを読み込んでください', 'error');
     return;
   }
 
-  const loudThreshold = parseInt(document.getElementById('loudThreshold').value);
-  const durationThreshold = parseFloat(document.getElementById('durationThreshold').value);
+  const progressContainer = document.getElementById('progressContainer');
 
-  document.getElementById('analyzeBtn').disabled = true;
-  document.getElementById('progressContainer').style.display = 'block';
+  setTopActionButtonsDisabled(true);
+  progressContainer.style.display = 'block';
   updateProgress('検出中...', 10);
 
   addMessage('🔍 Python バックエンドで音量急変を検出しています...', 'info');
 
-  const data = await detectSpikesFromServer(currentFilePath);
+  try {
+    const data = await detectSpikesFromServer(currentFilePath);
+    applyDetectedClips(data);
+    updateProgress('検出完了', 100);
+  } finally {
+    setTimeout(() => {
+      setTopActionButtonsDisabled(false);
+      progressContainer.style.display = 'none';
+    }, 1000);
+  }
+}
 
-  if (data && data.clips) {
-    clips = data.clips.map(c => ({ start: c.start, end: c.end }));
-    checkedClips.clear();
-    processedClips.clear();
-    selectedClipIndex = -1;
-    addMessage(`${clips.length}個のクリップを作成しました`, 'success');
-
-    renderClips();
-    updateClipList();
-
-    document.getElementById('downloadSegmentsBtn').style.display = 'inline-block';
-    document.getElementById('clipEditSection').style.display = 'block';
+async function handleAutoExport() {
+  if (isProcessing) {
+    addMessage('別の書き出し処理が進行中です', 'warning');
+    return;
   }
 
-  updateProgress('検出完了', 100);
-  setTimeout(() => {
-    document.getElementById('analyzeBtn').disabled = false;
-    document.getElementById('progressContainer').style.display = 'none';
-  }, 1000);
+  if (!currentFilePath) {
+    addMessage('先に動画ファイルを読み込んでください', 'error');
+    return;
+  }
+
+  const autoExportBtn = document.getElementById('autoExportBtn');
+  const progressContainer = document.getElementById('progressContainer');
+  const originalText = autoExportBtn.innerHTML;
+
+  setTopActionButtonsDisabled(true);
+  autoExportBtn.innerHTML = '自動出力中<span class="spinner"></span>';
+  isProcessing = true;
+  progressContainer.style.display = 'block';
+  updateProgress('自動検出中...', 10);
+
+  addMessage('🎬 自動出力を開始しました。自動検出から全クリップ書き出しまで連続で実行します', 'info');
+
+  try {
+    const data = await detectSpikesFromServer(currentFilePath);
+    const hasDetectedClips = applyDetectedClips(data);
+
+    if (!hasDetectedClips) {
+      updateProgress('自動出力を停止しました', 0);
+      return;
+    }
+
+    if (clips.length === 0) {
+      addMessage('検出されたクリップがないため、自動出力は行いませんでした', 'warning');
+      updateProgress('出力対象なし', 100);
+      return;
+    }
+
+    updateProgress('書き出しを開始します...', 35);
+
+    const exportIndexes = clips.map((_, index) => index);
+    await exportClipIndexes(exportIndexes, {
+      startMessage: `FFmpegで検出された${exportIndexes.length}個のクリップを自動出力しています...`,
+      successMessage: `${exportIndexes.length}個の検出済みクリップを自動出力しました`,
+      emptyMessage: '自動出力できるクリップがありません',
+      showProgress: true
+    });
+  } finally {
+    autoExportBtn.innerHTML = originalText;
+    setTopActionButtonsDisabled(false);
+    isProcessing = false;
+
+    setTimeout(() => {
+      progressContainer.style.display = 'none';
+    }, 2000);
+  }
 }
 
 
@@ -664,6 +873,12 @@ async function handleCompress() {
 
 // ===== キーボード操作 =====
 function handleKeyDown(e) {
+  if (e.key === 'Escape' && isSidePanelOpen) {
+    e.preventDefault();
+    toggleSidePanel(false);
+    return;
+  }
+
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
 
   // スペースキー: repeatを無視してトグル（押しっぱなし対応）
@@ -764,6 +979,7 @@ function saveState() {
     clips: JSON.parse(JSON.stringify(clips)),
     checkedClips: new Set(checkedClips),
     processedClips: new Set(processedClips),
+    reviewApprovedClips: new Set(reviewApprovedClips),
     selectedClipIndex: selectedClipIndex
   });
   if (undoStack.length > maxUndoSteps) undoStack.shift();
@@ -778,9 +994,13 @@ function handleUndo() {
   clips = JSON.parse(JSON.stringify(state.clips));
   checkedClips = new Set(state.checkedClips);
   processedClips = new Set(state.processedClips || []);
+  reviewApprovedClips = new Set(state.reviewApprovedClips || []);
   selectedClipIndex = state.selectedClipIndex;
   renderClips();
   updateClipList();
+  if (currentWorkspaceMode === 'review' && selectedClipIndex >= 0 && clips[selectedClipIndex]) {
+    requestAnimationFrame(() => scrollReviewCardIntoView(selectedClipIndex, 'smooth'));
+  }
   addMessage('元に戻しました', 'success');
 }
 
@@ -853,6 +1073,7 @@ function handleMouseMove(e) {
     let newStart = clip.start + deltaTime;
     newStart = Math.max(0, Math.min(newStart, duration - clipDuration));
     processedClips.delete(selectedClipIndex);
+    reviewApprovedClips.delete(selectedClipIndex);
     clips[selectedClipIndex] = { start: newStart, end: newStart + clipDuration };
     if (videoElement) videoElement.currentTime = newStart;
     dragStartX = e.clientX;
@@ -861,6 +1082,7 @@ function handleMouseMove(e) {
   } else if (isResizing && selectedClipIndex >= 0) {
     const clip = clips[selectedClipIndex];
     processedClips.delete(selectedClipIndex);
+    reviewApprovedClips.delete(selectedClipIndex);
     if (resizeDirection === 'left') {
       let newStart = clip.start + deltaTime;
       newStart = Math.max(0, Math.min(newStart, clip.end - 0.5));
@@ -1085,6 +1307,7 @@ function renderClips() {
     marker.className = 'segment-marker';
     if (index === selectedClipIndex) marker.classList.add('selected');
     if (checkedClips.has(index)) marker.classList.add('checked');
+    if (reviewApprovedClips.has(index)) marker.classList.add('approved');
     if (index === activePlaybackIndex) marker.classList.add('playback-active');
     marker.style.left = startPercent + '%';
     marker.style.width = widthPercent + '%';
@@ -1276,43 +1499,48 @@ function updateClipPreviewSliderFill(slider) {
 }
 
 function syncClipPreviewSliders() {
-  const clipList = document.getElementById('clipList');
-  if (!clipList) return;
+  const clipContainers = ['clipList', 'reviewClipCarousel']
+    .map((containerId) => document.getElementById(containerId))
+    .filter(Boolean);
+  if (clipContainers.length === 0) return;
 
   const currentTime = videoElement && Number.isFinite(videoElement.currentTime)
     ? videoElement.currentTime
     : 0;
   const activePlaybackIndex = getActivePlaybackClipIndex(currentTime);
 
-  clipList.querySelectorAll('.clip-item').forEach((item) => {
-    const index = parseInt(item.dataset.index, 10);
-    const clip = clips[index];
-    if (!clip) return;
+  clipContainers.forEach((container) => {
+    container.querySelectorAll('.clip-item').forEach((item) => {
+      const index = parseInt(item.dataset.index, 10);
+      const clip = clips[index];
+      if (!clip) return;
 
-    const slider = item.querySelector('.clip-preview-slider');
-    const currentLabel = item.querySelector('.clip-current-time');
-    const checkbox = item.querySelector('.clip-checkbox');
-    const previewTime = getClipPreviewTime(clip, currentTime);
-    const isActive = index === activePlaybackIndex;
+      const slider = item.querySelector('.clip-preview-slider');
+      const currentLabel = item.querySelector('.clip-current-time');
+      const checkbox = item.querySelector('.clip-checkbox');
+      const previewTime = getClipPreviewTime(clip, currentTime);
+      const isActive = index === activePlaybackIndex;
 
-    item.classList.toggle('selected', index === selectedClipIndex);
-    item.classList.toggle('checked', checkedClips.has(index));
-    item.classList.toggle('exported', processedClips.has(index));
-    item.classList.toggle('playback-active', isActive);
+      item.classList.toggle('selected', index === selectedClipIndex);
+      item.classList.toggle('checked', checkedClips.has(index));
+      item.classList.toggle('exported', processedClips.has(index));
+      item.classList.toggle('approved', reviewApprovedClips.has(index));
+      item.classList.toggle('playback-active', isActive);
 
-    if (slider && document.activeElement !== slider) {
-      slider.value = previewTime;
-    }
-    if (checkbox) {
-      checkbox.checked = checkedClips.has(index);
-      checkbox.disabled = processedClips.has(index);
-    }
-    if (slider) {
-      updateClipPreviewSliderFill(slider);
-    }
-    if (currentLabel) {
-      currentLabel.textContent = formatTime(previewTime);
-    }
+      if (slider && document.activeElement !== slider) {
+        slider.value = previewTime;
+      }
+      if (checkbox) {
+        checkbox.checked = checkedClips.has(index);
+        checkbox.disabled = processedClips.has(index);
+      }
+      if (slider) {
+        updateClipPreviewSliderFill(slider);
+      }
+      if (currentLabel) {
+        currentLabel.textContent = formatTime(previewTime);
+      }
+    });
   });
 }
 
@@ -1513,6 +1741,9 @@ function handleAddClip() {
   selectedClipIndex = clips.length - 1;
   renderClips();
   updateClipList();
+  if (currentWorkspaceMode === 'review') {
+    requestAnimationFrame(() => scrollReviewCardIntoView(selectedClipIndex, 'smooth'));
+  }
   addMessage(formatTime(newStart) + ' にクリップを追加しました', 'success');
   document.getElementById('downloadSegmentsBtn').style.display = 'inline-block';
   document.getElementById('clipEditSection').style.display = 'block';
@@ -1567,11 +1798,13 @@ function updateClipList() {
 
   if (clips.length === 0) {
     clipList.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#9ca3af;padding:20px">クリップがありません</p>';
+    updateReviewClipList();
     return;
   }
 
   clips.forEach((clip, index) => {
     const isProcessed = processedClips.has(index);
+    const isApproved = reviewApprovedClips.has(index);
     const item = document.createElement('div');
     item.className = 'clip-item';
     item.dataset.index = index;
@@ -1579,6 +1812,7 @@ function updateClipList() {
     if (index === selectedClipIndex) item.classList.add('selected');
     if (checkedClips.has(index)) item.classList.add('checked');
     if (isProcessed) item.classList.add('exported');
+    if (isApproved) item.classList.add('approved');
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -1592,7 +1826,10 @@ function updateClipList() {
 
     const metaDiv = document.createElement('div');
     metaDiv.className = 'clip-item-meta';
-    metaDiv.innerHTML = '<span class="clip-item-duration">' + formatTime(clip.end - clip.start) + '</span>' + (isProcessed ? '<span class="clip-item-exported-badge">処理済</span>' : '');
+    metaDiv.innerHTML =
+      '<span class="clip-item-duration">' + formatTime(clip.end - clip.start) + '</span>' +
+      (isApproved ? '<span class="review-ok-badge">OK</span>' : '') +
+      (isProcessed ? '<span class="clip-item-exported-badge">処理済</span>' : '');
 
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'clip-item-actions';
@@ -1663,18 +1900,273 @@ function updateClipList() {
     clipList.appendChild(item);
   });
 
+  updateReviewClipList();
   syncClipPreviewSliders();
 }
 
+function updateReviewSummary() {
+  const reviewSummary = document.getElementById('reviewSummary');
+  if (!reviewSummary) return;
+
+  const approvedCount = Array.from(reviewApprovedClips).filter((index) => clips[index]).length;
+  const undecidedCount = Math.max(0, clips.length - approvedCount);
+  const currentLabel = clips.length === 0 || selectedClipIndex < 0 || !clips[selectedClipIndex]
+    ? '0 / 0'
+    : `${selectedClipIndex + 1} / ${clips.length}`;
+
+  reviewSummary.innerHTML =
+    '<span class="review-summary-chip">現在 ' + currentLabel + '</span>' +
+    '<span class="review-summary-chip">OK ' + approvedCount + '</span>' +
+    '<span class="review-summary-chip">未判定 ' + undecidedCount + '</span>';
+}
+
+function updateReviewNavigation() {
+  const reviewPrevBtn = document.getElementById('reviewPrevBtn');
+  const reviewNextBtn = document.getElementById('reviewNextBtn');
+  const hasClips = clips.length > 0;
+  const currentIndex = selectedClipIndex >= 0 && clips[selectedClipIndex] ? selectedClipIndex : 0;
+
+  if (reviewPrevBtn) {
+    reviewPrevBtn.disabled = !hasClips || currentIndex <= 0;
+  }
+  if (reviewNextBtn) {
+    reviewNextBtn.disabled = !hasClips || currentIndex >= clips.length - 1;
+  }
+}
+
+function scrollReviewCardIntoView(index, behavior = 'smooth') {
+  const reviewClipCarousel = document.getElementById('reviewClipCarousel');
+  if (!reviewClipCarousel) return;
+
+  const card = reviewClipCarousel.querySelector('.review-clip-card[data-index="' + index + '"]');
+  if (card) {
+    card.scrollIntoView({ behavior, inline: 'center', block: 'nearest' });
+  }
+}
+
+function focusReviewClip(index, options = {}) {
+  if (!clips[index]) return;
+
+  selectedClipIndex = index;
+  clearClipPlaybackMonitor();
+  if (options.syncVideo !== false && videoElement) {
+    videoElement.currentTime = clips[index].start;
+  }
+
+  renderClips();
+  updateClipList();
+
+  if (options.scrollReview) {
+    requestAnimationFrame(() => scrollReviewCardIntoView(index, options.behavior || 'smooth'));
+  }
+}
+
+function moveReviewFocus(direction) {
+  if (clips.length === 0) {
+    addMessage('クリップがありません', 'warning');
+    return;
+  }
+
+  const currentIndex = selectedClipIndex >= 0 && clips[selectedClipIndex]
+    ? selectedClipIndex
+    : 0;
+  const nextIndex = Math.max(0, Math.min(clips.length - 1, currentIndex + direction));
+
+  focusReviewClip(nextIndex, {
+    syncVideo: true,
+    scrollReview: true,
+    behavior: 'smooth'
+  });
+}
+
+function approveReviewClip(index) {
+  if (!clips[index]) return;
+
+  const wasApproved = reviewApprovedClips.has(index);
+  if (!wasApproved) {
+    saveState();
+    reviewApprovedClips.add(index);
+    addMessage('クリップ ' + (index + 1) + ' を OK にしました', 'success');
+  }
+
+  const nextIndex = index < clips.length - 1 ? index + 1 : index;
+  focusReviewClip(nextIndex, {
+    syncVideo: true,
+    scrollReview: true,
+    behavior: 'smooth'
+  });
+}
+
+function updateReviewClipList() {
+  const reviewClipCarousel = document.getElementById('reviewClipCarousel');
+  if (!reviewClipCarousel) return;
+
+  reviewClipCarousel.innerHTML = '';
+
+  if (clips.length === 0) {
+    reviewClipCarousel.innerHTML = '<div class="review-empty">クリップがありません。自動検出または手動追加のあとに高速判定を使えます。</div>';
+    updateReviewSummary();
+    updateReviewNavigation();
+    return;
+  }
+
+  clips.forEach((clip, index) => {
+    const isProcessed = processedClips.has(index);
+    const isApproved = reviewApprovedClips.has(index);
+
+    const item = document.createElement('div');
+    item.className = 'clip-item review-clip-card';
+    item.dataset.index = index;
+    if (index === selectedClipIndex) item.classList.add('selected');
+    if (isApproved) item.classList.add('approved');
+    if (isProcessed) item.classList.add('exported');
+
+    const indexBadge = document.createElement('div');
+    indexBadge.className = 'review-card-index';
+    indexBadge.textContent = index + 1;
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'clip-item-title';
+    titleDiv.innerHTML = '<strong class="clip-item-name">クリップ ' + (index + 1) + '</strong><span class="clip-item-range">' + formatTime(clip.start) + ' → ' + formatTime(clip.end) + '</span>';
+
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'clip-item-meta';
+    metaDiv.innerHTML =
+      '<span class="clip-item-duration">' + formatTime(clip.end - clip.start) + '</span>' +
+      (isApproved ? '<span class="review-ok-badge">OK</span>' : '<span class="clip-item-exported-badge">未判定</span>') +
+      (isProcessed ? '<span class="clip-item-exported-badge">処理済</span>' : '');
+
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'review-card-actions';
+
+    const playButton = document.createElement('button');
+    playButton.className = 'btn-small';
+    playButton.type = 'button';
+    playButton.style.background = '#8b5cf6';
+    playButton.style.color = 'white';
+    playButton.title = 'このクリップを再生';
+    playButton.textContent = '▶';
+    playButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      playClip(index);
+    });
+
+    const approveButton = document.createElement('button');
+    approveButton.className = 'review-action-btn ok';
+    approveButton.type = 'button';
+    approveButton.title = 'このクリップを OK として次へ移動';
+    approveButton.textContent = isApproved ? 'OK済' : 'OK';
+    approveButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      approveReviewClip(index);
+    });
+
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'review-action-btn delete';
+    deleteButton.type = 'button';
+    deleteButton.title = 'このクリップを削除';
+    deleteButton.textContent = '✕';
+    deleteButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteSingleClip(index);
+    });
+
+    actionsDiv.appendChild(playButton);
+    actionsDiv.appendChild(approveButton);
+    actionsDiv.appendChild(deleteButton);
+
+    const sliderWrap = document.createElement('div');
+    sliderWrap.className = 'clip-slider-wrap';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'clip-preview-slider';
+    slider.min = clip.start;
+    slider.max = clip.end;
+    slider.step = '0.05';
+    slider.value = getClipPreviewTime(clip, videoElement ? videoElement.currentTime : clip.start);
+    slider.dataset.index = index;
+
+    const sliderStatus = document.createElement('div');
+    sliderStatus.className = 'clip-slider-status';
+    sliderStatus.innerHTML = '<span>' + formatTime(clip.start) + '</span><span class="clip-current-time">' + formatTime(parseFloat(slider.value)) + '</span><span>' + formatTime(clip.end) + '</span>';
+
+    updateClipPreviewSliderFill(slider);
+
+    slider.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    slider.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      selectedClipIndex = index;
+      renderClips();
+      syncClipPreviewSliders();
+    });
+    slider.addEventListener('input', (e) => {
+      e.stopPropagation();
+      selectedClipIndex = index;
+      clearClipPlaybackMonitor();
+      if (videoElement) {
+        videoElement.currentTime = parseFloat(e.target.value);
+      }
+      renderClips();
+      updateClipPreviewSliderFill(slider);
+      syncClipPreviewSliders();
+    });
+
+    sliderWrap.appendChild(slider);
+    sliderWrap.appendChild(sliderStatus);
+
+    item.appendChild(indexBadge);
+    item.appendChild(titleDiv);
+    item.appendChild(metaDiv);
+    item.appendChild(actionsDiv);
+    item.appendChild(sliderWrap);
+
+    item.addEventListener('click', (e) => {
+      if (!e.target.closest('button') && !e.target.closest('.clip-preview-slider')) {
+        focusReviewClip(index, {
+          syncVideo: true,
+          scrollReview: true,
+          behavior: 'smooth'
+        });
+      }
+    });
+
+    reviewClipCarousel.appendChild(item);
+  });
+
+  updateReviewSummary();
+  updateReviewNavigation();
+}
+
 function deleteSingleClip(index) {
+  if (!clips[index]) return;
+
   saveState();
+  const deletedClipNumber = index + 1;
+  const wasSelected = selectedClipIndex === index;
   clips.splice(index, 1);
   checkedClips = remapIndexedSet(checkedClips, index);
   processedClips = remapIndexedSet(processedClips, index);
+  reviewApprovedClips = remapIndexedSet(reviewApprovedClips, index);
   selectedClipIndex = remapSelectedIndex(selectedClipIndex, index);
+
+  if (wasSelected && clips.length > 0) {
+    selectedClipIndex = Math.min(index, clips.length - 1);
+  }
+
   renderClips();
   updateClipList();
-  addMessage('クリップ ' + (index + 1) + ' を削除しました', 'success');
+
+  if (currentWorkspaceMode === 'review' && selectedClipIndex >= 0 && clips[selectedClipIndex]) {
+    if (videoElement) {
+      videoElement.currentTime = clips[selectedClipIndex].start;
+    }
+    requestAnimationFrame(() => scrollReviewCardIntoView(selectedClipIndex, 'smooth'));
+  }
+
+  addMessage('クリップ ' + deletedClipNumber + ' を削除しました', 'success');
 }
 
 async function exportClipIndexes(exportIndexes, options = {}) {
@@ -1816,6 +2308,11 @@ async function exportSingleClip(index, buttonElement) {
 }
 
 async function handleDownloadSegments() {
+  if (isProcessing) {
+    addMessage('別の書き出し処理が進行中です', 'warning');
+    return;
+  }
+
   if (!clips || clips.length === 0 || !currentFilePath) {
     addMessage('出力するクリップがありません', 'error');
     return;
@@ -1854,9 +2351,13 @@ function handleDeleteClip() {
   toDelete.forEach((index) => clips.splice(index, 1));
   checkedClips.clear();
   processedClips = remapIndexedSet(processedClips, toDelete);
+  reviewApprovedClips = remapIndexedSet(reviewApprovedClips, toDelete);
   selectedClipIndex = remapSelectedIndex(selectedClipIndex, toDelete);
   renderClips();
   updateClipList();
+  if (currentWorkspaceMode === 'review' && selectedClipIndex >= 0 && clips[selectedClipIndex]) {
+    requestAnimationFrame(() => scrollReviewCardIntoView(selectedClipIndex, 'smooth'));
+  }
   addMessage(toDelete.length + '個のクリップを削除しました', 'success');
 }
 

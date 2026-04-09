@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Movie_AutoCut 高速判定</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+      color: #fff;
+      min-height: 100vh;
+      padding: 14px
+    }
+
+    body.side-panel-open {
+      overflow: hidden
+    }
+
+    .container {
+      width: min(92vw, 2200px);
+      margin: 0 auto
+    }
+
+    .header {
+      margin-bottom: 28px
+    }
+
+    .title {
+      font-size: 2.6rem;
+      font-weight: 800;
+      background: linear-gradient(90deg, #38bdf8 0%, #22c55e 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 10px
+    }
+
+    .subtitle {
+      color: #94a3b8;
+      font-size: 1rem;
+      line-height: 1.6
+    }
+
+    .menu-fab {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      width: 54px;
+      height: 54px;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.92);
+      color: #f8fafc;
+      font-size: 1.45rem;
+      cursor: pointer;
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.45);
+      z-index: 340;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease
+    }
+
+    .menu-fab:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 18px 34px rgba(15, 23, 42, 0.52);
+      background: rgba(30, 41, 59, 0.96)
+    }
+
+    .menu-fab.active {
+      box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.28), 0 18px 34px rgba(15, 23, 42, 0.52)
+    }
+
+    .side-panel-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.55);
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 320
+    }
+
+    .side-panel-overlay.open {
+      opacity: 1;
+      pointer-events: auto
+    }
+
+    .side-panel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: min(360px, 86vw);
+      height: 100vh;
+      padding: 26px 20px 22px;
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
+      border-right: 1px solid rgba(148, 163, 184, 0.22);
+      box-shadow: 26px 0 60px rgba(2, 6, 23, 0.42);
+      transform: translateX(-105%);
+      transition: transform 0.26s ease;
+      z-index: 330;
+      display: flex;
+      flex-direction: column;
+      gap: 18px
+    }
+
+    .side-panel.open {
+      transform: translateX(0)
+    }
+
+    .side-panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px
+    }
+
+    .side-panel-title {
+      font-size: 1.2rem;
+      color: #f8fafc;
+      font-weight: 700;
+      margin-bottom: 6px
+    }
+
+    .side-panel-subtitle {
+      color: #94a3b8;
+      font-size: 0.86rem;
+      line-height: 1.5
+    }
+
+    .side-panel-close {
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.72);
+      color: #e2e8f0;
+      cursor: pointer;
+      font-size: 1rem
+    }
+
+    .side-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 10px
+    }
+
+    .side-nav-btn {
+      display: block;
+      width: 100%;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.72);
+      color: #e2e8f0;
+      padding: 14px 16px;
+      text-align: left;
+      text-decoration: none;
+      cursor: pointer;
+      font-weight: 700;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease
+    }
+
+    .side-nav-btn:hover {
+      transform: translateX(3px);
+      background: rgba(30, 41, 59, 0.92)
+    }
+
+    .side-nav-btn.active {
+      background: linear-gradient(135deg, rgba(14, 165, 233, 0.96) 0%, rgba(34, 197, 94, 0.94) 100%);
+      border-color: rgba(134, 239, 172, 0.5);
+      color: #ecfeff;
+      box-shadow: 0 14px 30px rgba(16, 185, 129, 0.16)
+    }
+
+    .side-panel-note {
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.56);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      color: #cbd5e1;
+      font-size: 0.84rem;
+      line-height: 1.7
+    }
+
+    .side-panel-note strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #f8fafc
+    }
+
+    .card {
+      background: rgba(30, 41, 59, 0.5);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 20px
+    }
+
+    .section-title {
+      font-size: 1.4rem;
+      margin-bottom: 18px;
+      color: #67e8f9
+    }
+
+    .top-control-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.8fr) minmax(320px, 0.9fr);
+      gap: 16px;
+      align-items: stretch;
+      margin-bottom: 16px
+    }
+
+    .top-control-card {
+      background: rgba(15, 23, 42, 0.45);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 12px;
+      padding: 18px;
+      min-width: 0
+    }
+
+    .card-label {
+      display: block;
+      margin-bottom: 8px;
+      color: #d1d5db;
+      font-size: 0.92rem
+    }
+
+    .textarea {
+      width: 100%;
+      min-height: 132px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      background: rgba(2, 6, 23, 0.52);
+      color: #f8fafc;
+      padding: 14px;
+      font-size: 0.94rem;
+      line-height: 1.55;
+      resize: vertical
+    }
+
+    .textarea:focus,
+    .btn:focus,
+    .review-nav-btn:focus {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25)
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px
+    }
+
+    .btn {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 0.92rem;
+      font-weight: 700;
+      transition: transform 0.2s ease, filter 0.2s ease
+    }
+
+    .btn:hover {
+      transform: translateY(-1px)
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%)
+    }
+
+    .btn-secondary {
+      background: rgba(71, 85, 105, 0.85)
+    }
+
+    .btn-danger {
+      background: #ef4444
+    }
+
+    .summary-list {
+      display: grid;
+      gap: 12px
+    }
+
+    .summary-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.62);
+      border: 1px solid rgba(148, 163, 184, 0.18)
+    }
+
+    .summary-item span:first-child {
+      color: #94a3b8
+    }
+
+    .summary-item span:last-child {
+      color: #f8fafc;
+      font-weight: 700;
+      text-align: right
+    }
+
+    .help-text {
+      font-size: 0.85rem;
+      color: #9ca3af;
+      margin-top: 8px;
+      line-height: 1.6
+    }
+
+    .progress-container {
+      display: none;
+      margin-bottom: 18px;
+      padding: 14px 18px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px
+    }
+
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 0.9rem
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 20px;
+      background: #1e293b;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid #475569
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #06b6d4 0%, #22c55e 100%);
+      width: 0%;
+      transition: width 0.3s ease
+    }
+
+    .preview-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 16px
+    }
+
+    .current-file-name {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #f8fafc;
+      word-break: break-all
+    }
+
+    .current-file-meta {
+      margin-top: 6px;
+      color: #94a3b8;
+      font-size: 0.86rem;
+      line-height: 1.7
+    }
+
+    .review-summary {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap
+    }
+
+    .review-summary-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.72);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      color: #e2e8f0;
+      font-size: 0.78rem;
+      font-weight: 700
+    }
+
+    .video-container {
+      position: relative;
+      width: min(100%, 1280px);
+      margin: 0 auto;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.22)
+    }
+
+    #videoPlayer {
+      width: 100%;
+      max-height: 60vh;
+      display: block;
+      background: #000
+    }
+
+    .timeline-container {
+      position: relative;
+      margin-top: 12px;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 10px
+    }
+
+    .timeline-wrapper {
+      flex: 1;
+      position: relative
+    }
+
+    #waveformCanvas {
+      width: 100%;
+      height: 160px;
+      display: block;
+      border-radius: 10px;
+      cursor: grab
+    }
+
+    #segmentMarkers {
+      position: absolute;
+      inset: 0;
+      pointer-events: none
+    }
+
+    #overviewPopup {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 8px;
+      display: none;
+      pointer-events: none
+    }
+
+    #overviewTrack {
+      position: relative;
+      width: calc(100% - 16px);
+      height: 16px;
+      margin: 0 auto;
+      background: rgba(15, 23, 42, 0.86);
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.22)
+    }
+
+    #overviewThumb {
+      position: absolute;
+      top: 1px;
+      bottom: 1px;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.45);
+      border: 1px solid rgba(74, 222, 128, 0.9)
+    }
+
+    .settings-grid {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px
+    }
+
+    .settings-box {
+      padding: 16px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(148, 163, 184, 0.16)
+    }
+
+    .settings-box-title {
+      color: #dbeafe;
+      margin-bottom: 10px;
+      font-size: 0.9rem
+    }
+
+    #playbackSpeedDisplay {
+      font-size: 2.3rem;
+      font-weight: 800;
+      background: linear-gradient(90deg, #38bdf8 0%, #22c55e 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px
+    }
+
+    .slider {
+      width: 100%
+    }
+
+    .review-carousel-shell {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: stretch
+    }
+
+    .review-nav-btn {
+      width: 48px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.76);
+      color: #f8fafc;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: transform 0.2s ease, background 0.2s ease
+    }
+
+    .review-nav-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      background: rgba(30, 41, 59, 0.94)
+    }
+
+    .review-nav-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed
+    }
+
+    .review-carousel {
+      display: flex;
+      gap: 16px;
+      overflow-x: auto;
+      padding: 8px 4px 12px;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth
+    }
+
+    .review-carousel::-webkit-scrollbar {
+      height: 10px
+    }
+
+    .review-carousel::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.4);
+      border-radius: 999px
+    }
+
+    .clip-item {
+      background: linear-gradient(180deg, rgba(203, 213, 225, 0.14), rgba(15, 23, 42, 0.92));
+      border: 1px solid rgba(203, 213, 225, 0.32);
+      border-radius: 12px;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      grid-template-areas:
+        "checkbox title actions"
+        ". meta meta"
+        ". slider slider";
+      gap: 10px 12px;
+      align-items: start;
+      min-height: 170px;
+      transition: all 0.2s ease;
+      cursor: pointer
+    }
+
+    .clip-item.selected {
+      box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.34)
+    }
+
+    .clip-item.approved {
+      border-color: rgba(34, 197, 94, 0.58);
+      box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.2)
+    }
+
+    .clip-item.playback-active {
+      border-color: rgba(14, 165, 233, 0.62);
+      box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.28), 0 0 20px rgba(14, 165, 233, 0.16)
+    }
+
+    .review-clip-card {
+      flex: 0 0 min(420px, calc(100vw - 190px));
+      min-width: 320px;
+      scroll-snap-align: center
+    }
+
+    .review-card-index {
+      grid-area: checkbox;
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: rgba(14, 165, 233, 0.2);
+      border: 1px solid rgba(56, 189, 248, 0.38);
+      color: #e0f2fe;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700
+    }
+
+    .clip-item-title {
+      grid-area: title;
+      min-width: 0
+    }
+
+    .clip-item-name {
+      display: block;
+      font-size: 0.92rem;
+      line-height: 1.4;
+      margin-bottom: 4px;
+      word-break: break-word
+    }
+
+    .clip-item-range {
+      font-size: 0.76rem;
+      color: #67e8f9
+    }
+
+    .clip-item-meta {
+      grid-area: meta;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 0.74rem;
+      color: #cbd5e1
+    }
+
+    .clip-item-duration {
+      color: #93c5fd
+    }
+
+    .review-ok-badge,
+    .clip-item-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      height: 22px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 700
+    }
+
+    .review-ok-badge {
+      background: rgba(34, 197, 94, 0.18);
+      border: 1px solid rgba(74, 222, 128, 0.42);
+      color: #bbf7d0
+    }
+
+    .clip-item-badge {
+      background: rgba(148, 163, 184, 0.16);
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      color: #e2e8f0
+    }
+
+    .review-card-actions {
+      grid-area: actions;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end
+    }
+
+    .btn-small,
+    .review-action-btn {
+      height: 30px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #fff
+    }
+
+    .btn-small {
+      width: 30px;
+      padding: 0
+    }
+
+    .review-action-btn {
+      padding: 0 12px
+    }
+
+    .review-action-btn.ok {
+      background: #10b981
+    }
+
+    .review-action-btn.delete {
+      background: #ef4444
+    }
+
+    .clip-slider-wrap {
+      grid-area: slider;
+      display: flex;
+      flex-direction: column;
+      gap: 8px
+    }
+
+    .clip-preview-slider {
+      width: 100%;
+      margin: 0;
+      height: 12px;
+      border-radius: 999px;
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+      appearance: none;
+      background: linear-gradient(90deg,
+        rgba(34, 197, 94, 0.95) 0%,
+        rgba(34, 197, 94, 0.95) var(--clip-progress, 0%),
+        rgba(51, 65, 85, 0.92) var(--clip-progress, 0%),
+        rgba(51, 65, 85, 0.92) 100%)
+    }
+
+    .clip-preview-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #f8fafc;
+      border: 2px solid #22c55e;
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.72)
+    }
+
+    .clip-preview-slider::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #f8fafc;
+      border: 2px solid #22c55e
+    }
+
+    .clip-slider-status {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: #94a3b8
+    }
+
+    .clip-current-time {
+      color: #f8fafc;
+      font-weight: 700
+    }
+
+    .review-empty {
+      min-height: 160px;
+      border-radius: 14px;
+      border: 1px dashed rgba(148, 163, 184, 0.3);
+      background: rgba(15, 23, 42, 0.4);
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center
+    }
+
+    .message-area {
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 15px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px
+    }
+
+    .message {
+      padding: 12px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      border-left: 3px solid
+    }
+
+    .message-info {
+      background: rgba(59, 130, 246, 0.1);
+      border-color: #3b82f6
+    }
+
+    .message-success {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: #22c55e
+    }
+
+    .message-error {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: #ef4444
+    }
+
+    .message-warning {
+      background: rgba(245, 158, 11, 0.1);
+      border-color: #f59e0b
+    }
+
+    @media (max-width: 1100px) {
+      .top-control-grid {
+        grid-template-columns: 1fr
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding: 10px
+      }
+
+      .container {
+        width: 96vw
+      }
+
+      .menu-fab {
+        top: 12px;
+        left: 12px;
+        width: 48px;
+        height: 48px
+      }
+
+      .side-panel {
+        width: min(320px, 92vw);
+        padding: 20px 16px 18px
+      }
+
+      .settings-grid,
+      .review-carousel-shell {
+        grid-template-columns: 1fr
+      }
+
+      .review-nav-btn {
+        width: 100%;
+        min-height: 42px
+      }
+
+      .review-clip-card {
+        flex-basis: min(360px, calc(100vw - 44px));
+        min-width: 280px
+      }
+    }
+  </style>
+</head>
+<body>
+  <button id="navMenuBtn" class="menu-fab" type="button" title="ナビゲーションを開く" aria-controls="sidePanel"
+    aria-expanded="false">☰</button>
+  <div id="sidePanelOverlay" class="side-panel-overlay" hidden></div>
+  <aside id="sidePanel" class="side-panel" aria-hidden="true">
+    <div class="side-panel-header">
+      <div>
+        <div class="side-panel-title">ページ移動</div>
+        <div class="side-panel-subtitle">通常編集ページと、高速判定ページを切り替えます。</div>
+      </div>
+      <button id="sidePanelCloseBtn" class="side-panel-close" type="button" title="閉じる">✕</button>
+    </div>
+    <div class="side-nav">
+      <a class="side-nav-btn" href="/">✂️ 通常編集</a>
+      <a class="side-nav-btn active" href="/review">⚡ 高速判定</a>
+    </div>
+    <div class="side-panel-note">
+      <strong>高速判定ページについて</strong>
+      ここでは既に小分け済みの複数動画をまとめて読み込み、プレビュー直下のカードで使える動画かどうかを高速に判定します。✕ は元ファイルを `C:\Users\HCY\Downloads\Jinricp\削除` へ移動待ち登録します。
+    </div>
+  </aside>
+
+  <div class="container">
+    <header class="header">
+      <h1 class="title">Movie_AutoCut 高速判定</h1>
+      <p class="subtitle">既に小分け済みの複数動画を一括で読み込み、1本ずつ OK / 削除フォルダ移動待ち登録 を高速判定します。</p>
+    </header>
+
+    <div class="top-control-grid">
+      <div class="top-control-card">
+        <label class="card-label" for="reviewFilePathsInput">📂 動画ファイルのパス （入力欄をダブルクリック→エクスプローラーで複数選択）</label>
+        <textarea id="reviewFilePathsInput" class="textarea" placeholder="入力欄をダブルクリックすると、Windows のエクスプローラーで複数の動画ファイルを選択できます。手入力する場合は改行区切りで入力してください。"></textarea>
+        <div class="button-row">
+          <button id="reviewBrowseFilesBtn" class="btn btn-primary" type="button">複数選択で参照</button>
+          <button id="reviewLoadFilesBtn" class="btn btn-secondary" type="button">読み込み開始</button>
+          <button id="reviewClearFilesBtn" class="btn btn-danger" type="button">入力をクリア</button>
+        </div>
+        <p class="help-text">通常ページと同じ感覚で、入力欄のダブルクリックから複数ファイルを選択できます。手入力する場合は 1 行に 1 パスずつ入力してください。</p>
+      </div>
+      <div class="top-control-card">
+        <label class="card-label">📊 読み込み状況</label>
+        <div class="summary-list">
+          <div class="summary-item"><span>読み込み本数</span><span id="reviewFileCountValue">0</span></div>
+          <div class="summary-item"><span>OK 本数</span><span id="reviewApprovedCountValue">0</span></div>
+          <div class="summary-item"><span>現在位置</span><span id="reviewCurrentValue">0 / 0</span></div>
+        </div>
+        <p class="help-text">Backspace / Delete は現在の動画を `C:\Users\HCY\Downloads\Jinricp\削除` へ移動待ち登録、Space は再生/停止、← → は 5 秒移動、D/S は再生速度変更です。</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="preview-header">
+        <div>
+          <h3 class="section-title">プレビュー</h3>
+          <div id="currentReviewFileName" class="current-file-name">動画が未選択です</div>
+          <div id="currentReviewFileMeta" class="current-file-meta">複数動画を読み込むと、ここに現在選択中の動画情報が表示されます。</div>
+        </div>
+        <div class="review-summary" id="reviewSummary"></div>
+      </div>
+
+      <div class="video-container">
+        <video id="videoPlayer" controls></video>
+      </div>
+
+      <h3 class="section-title" style="margin-top:20px">高速判定カード</h3>
+      <div class="review-carousel-shell">
+        <button id="reviewPrevBtn" class="review-nav-btn" type="button" title="前の動画へ">◀</button>
+        <div id="reviewClipCarousel" class="review-carousel" aria-label="高速判定カード一覧"></div>
+        <button id="reviewNextBtn" class="review-nav-btn" type="button" title="次の動画へ">▶</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="section-title">再生速度</h3>
+      <div class="settings-box">
+        <div id="playbackSpeedDisplay">1.0x</div>
+        <p class="help-text">D = 速度UP / S = 速度DOWN</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="section-title">処理ログ</h3>
+      <div id="messageArea" class="message-area"></div>
+    </section>
+  </div>
+
+  <script src="review.js"></script>
+</body>
+</html>
