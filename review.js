@@ -90,7 +90,7 @@ function applyReviewPlatformCopy() {
 
   const filePathsHelp = document.getElementById('reviewFilePathsHelp');
   if (filePathsHelp) {
-    filePathsHelp.textContent = '通常ページと同じ感覚で、入力欄のダブルクリックから複数ファイルを選択できます。手入力する場合は 1 行に 1 パスずつ入力してください。';
+    filePathsHelp.textContent = '複数選択で参照や入力欄のダブルクリックで動画を選ぶと、そのまま自動で読み込みます。読み込み開始は手入力後や再読み込みしたいときに使えます。';
   }
 
   const shortcutHelp = document.getElementById('reviewShortcutHelp');
@@ -1126,7 +1126,8 @@ async function handleBrowseFiles() {
     }
     const textarea = document.getElementById('reviewFilePathsInput');
     if (textarea) textarea.value = data.paths.join('\n');
-    addMessage(`${data.paths.length} 本の動画パスを入力しました`, 'success');
+    addMessage(`${data.paths.length} 本の動画を選択しました。自動で読み込みます`, 'success');
+    await loadReviewFiles(data.paths);
   } catch (error) {
     addMessage(error.message, 'error');
   }
@@ -1135,7 +1136,7 @@ async function handleBrowseFiles() {
 function handleLoadFiles() {
   const textarea = document.getElementById('reviewFilePathsInput');
   const paths = parseFilePaths(textarea ? textarea.value : '');
-  loadReviewFiles(paths);
+  return loadReviewFiles(paths);
 }
 
 function handleClearFiles() {
