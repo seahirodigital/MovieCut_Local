@@ -77,35 +77,17 @@ function applyReviewPlatformCopy() {
 
   const sideNote = document.querySelector('.side-panel-note');
   if (sideNote) {
-    sideNote.innerHTML = `
-      <strong>高速判定ページについて</strong>
-      ここでは既に小分け済みの複数動画をまとめて読み込み、レビュー直下のカードで使える動画かどうかを高速に判定します。OK は <code>${reviewApproveDirPath}</code>、✕ は <code>${reviewRejectDirPath}</code> へ移動し、カードは一覧から消えます。間違えたときは <code>戻る</code> または <code>Ctrl+Z</code> で 1 件ずつ元に戻せます。
-    `;
-  }
-
-  const subtitle = document.querySelector('.subtitle');
-  if (subtitle) {
-    subtitle.textContent = '既に小分け済みの複数動画を一括で読み込み、1本ずつ OK / 削除 を指定フォルダへ移動しながら高速判定します。';
-  }
-
-  const filePathsHelp = document.getElementById('reviewFilePathsHelp');
-  if (filePathsHelp) {
-    filePathsHelp.textContent = '複数選択で参照や入力欄のダブルクリックで動画を選ぶと、そのまま自動で読み込みます。読み込み開始は手入力後や再読み込みしたいときに使えます。';
-  }
-
-  const shortcutHelp = document.getElementById('reviewShortcutHelp');
-  if (shortcutHelp) {
-    shortcutHelp.innerHTML = `Backspace / Delete / ✕ は <code>${reviewRejectDirPath}</code> へ移動、Enter / OK は <code>${reviewApproveDirPath}</code> へ移動、Ctrl+Z / 戻る は 1 件戻す、Space / ] / \\ は再生/停止、← → は 3 秒移動、D/S は再生速度変更です。`;
+    sideNote.innerHTML = '';
   }
 
   const approveDirHelp = document.getElementById('reviewApproveDirHelp');
   if (approveDirHelp) {
-    approveDirHelp.innerHTML = `OK を押した動画は <code>${reviewApproveDirPath}</code> へ移動します。`;
+    approveDirHelp.innerHTML = '';
   }
 
   const rejectDirHelp = document.getElementById('reviewRejectDirHelp');
   if (rejectDirHelp) {
-    rejectDirHelp.innerHTML = `✕ を押した動画は <code>${reviewRejectDirPath}</code> へ移動します。`;
+    rejectDirHelp.innerHTML = '';
   }
 }
 
@@ -601,7 +583,7 @@ function updateCurrentReviewInfo() {
   const item = getCurrentReviewItem();
   if (!item) {
     nameElement.textContent = '動画を読み込んでください';
-    metaElement.textContent = '複数の分割済み動画を選ぶと、ここに現在の動画情報が表示されます。';
+    metaElement.textContent = '';
     return;
   }
 
@@ -1133,12 +1115,6 @@ async function handleBrowseFiles() {
   }
 }
 
-function handleLoadFiles() {
-  const textarea = document.getElementById('reviewFilePathsInput');
-  const paths = parseFilePaths(textarea ? textarea.value : '');
-  return loadReviewFiles(paths);
-}
-
 function handleClearFiles() {
   activeWaveformToken += 1;
   reviewUndoStack = [];
@@ -1448,7 +1424,6 @@ function init() {
   const sidePanelOverlay = document.getElementById('sidePanelOverlay');
   const sidePanelCloseBtn = document.getElementById('sidePanelCloseBtn');
   const reviewBrowseFilesBtn = document.getElementById('reviewBrowseFilesBtn');
-  const reviewLoadFilesBtn = document.getElementById('reviewLoadFilesBtn');
   const reviewClearFilesBtn = document.getElementById('reviewClearFilesBtn');
   const reviewApproveDirInput = document.getElementById('reviewApproveDirInput');
   const reviewRejectDirInput = document.getElementById('reviewRejectDirInput');
@@ -1463,7 +1438,6 @@ function init() {
   if (sidePanelOverlay) sidePanelOverlay.addEventListener('click', () => toggleSidePanel(false));
   if (sidePanelCloseBtn) sidePanelCloseBtn.addEventListener('click', () => toggleSidePanel(false));
   if (reviewBrowseFilesBtn) reviewBrowseFilesBtn.addEventListener('click', handleBrowseFiles);
-  if (reviewLoadFilesBtn) reviewLoadFilesBtn.addEventListener('click', handleLoadFiles);
   if (reviewClearFilesBtn) reviewClearFilesBtn.addEventListener('click', handleClearFiles);
   if (reviewApproveDirInput) {
     reviewApproveDirInput.title = 'ダブルクリックでフォルダ選択ダイアログを開く';
@@ -1495,12 +1469,6 @@ function init() {
     reviewFilePathsInput.addEventListener('dblclick', (e) => {
       e.preventDefault();
       handleBrowseFiles();
-    });
-    reviewFilePathsInput.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        handleLoadFiles();
-      }
     });
   }
 

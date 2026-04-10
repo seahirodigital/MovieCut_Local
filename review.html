@@ -207,6 +207,13 @@
       color: #67e8f9
     }
 
+    .preview-title-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap
+    }
+
     .top-control-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.8fr) minmax(320px, 0.9fr);
@@ -503,19 +510,13 @@
       border: 1px solid rgba(148, 163, 184, 0.16)
     }
 
-    .settings-box-title {
-      color: #dbeafe;
-      margin-bottom: 10px;
-      font-size: 0.9rem
-    }
-
     #playbackSpeedDisplay {
-      font-size: 2.3rem;
-      font-weight: 800;
+      font-size: 1.4rem;
+      font-weight: 700;
       background: linear-gradient(90deg, #38bdf8 0%, #22c55e 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      margin-bottom: 6px
+      line-height: 1
     }
 
     .slider {
@@ -878,7 +879,7 @@
     <div class="side-panel-header">
       <div>
         <div class="side-panel-title">ページ移動</div>
-        <div class="side-panel-subtitle">通常編集ページと、高速判定ページを切り替えます。</div>
+        <div class="side-panel-subtitle"></div>
       </div>
       <button id="sidePanelCloseBtn" class="side-panel-close" type="button" title="閉じる">✕</button>
     </div>
@@ -886,16 +887,12 @@
       <a class="side-nav-btn" href="/">✂️ 通常編集</a>
       <a class="side-nav-btn active" href="/review">⚡ 高速判定</a>
     </div>
-    <div class="side-panel-note">
-      <strong>高速判定ページについて</strong>
-      ここでは既に小分け済みの複数動画をまとめて読み込み、プレビュー直下のカードで使える動画かどうかを高速に判定します。OK と ✕ は、それぞれ設定した移動先フォルダへファイルを移動し、カードは一覧から消えます。
-    </div>
+    <div class="side-panel-note"></div>
   </aside>
 
   <div class="container">
     <header class="header">
       <h1 class="title">Movie_AutoCut 高速判定</h1>
-      <p class="subtitle">既に小分け済みの複数動画を一括で読み込み、1本ずつ OK / 削除 を指定フォルダへ移動しながら高速判定します。</p>
     </header>
 
     <div class="top-control-grid">
@@ -903,11 +900,9 @@
         <label class="card-label" for="reviewFilePathsInput">📂 動画ファイルのパス （入力欄をダブルクリック→ファイル選択ダイアログで複数選択）</label>
         <textarea id="reviewFilePathsInput" class="textarea" placeholder="入力欄をダブルクリックすると、ファイル選択ダイアログで複数の動画ファイルを選択できます。手入力する場合は改行区切りで入力してください。"></textarea>
         <div class="button-row">
-          <button id="reviewBrowseFilesBtn" class="btn btn-secondary" type="button">複数選択で参照</button>
-          <button id="reviewLoadFilesBtn" class="btn btn-primary" type="button">読み込み開始</button>
+          <button id="reviewBrowseFilesBtn" class="btn btn-primary" type="button">複数選択で参照</button>
           <button id="reviewClearFilesBtn" class="btn btn-danger" type="button">入力をクリア</button>
         </div>
-        <p id="reviewFilePathsHelp" class="help-text">複数選択で参照や入力欄のダブルクリックで動画を選ぶと、そのまま自動で読み込みます。読み込み開始は手入力後や再読み込みしたいときに使えます。</p>
       </div>
       <div class="top-control-card">
         <label class="card-label">📊 読み込み状況</label>
@@ -917,7 +912,6 @@
           <div class="summary-item"><span>削除 移動数</span><span id="reviewRejectedCountValue">0</span></div>
           <div class="summary-item"><span>現在位置</span><span id="reviewCurrentValue">0 / 0</span></div>
         </div>
-        <p id="reviewShortcutHelp" class="help-text">Backspace / Delete / ✕ は削除先へ移動、Enter / OK は OK 先へ移動、Ctrl+Z / 戻る は 1 件戻す、Space / ] / \ は再生/停止、← → は 3 秒移動、D/S は再生速度変更です。</p>
       </div>
       <div class="top-control-card">
         <label class="card-label" for="reviewApproveDirInput">📁 OK 移動先フォルダ <span style="color:#6ee7b7;font-size:0.8rem;">（ダブルクリックで選択）</span></label>
@@ -925,7 +919,7 @@
           <input type="text" id="reviewApproveDirInput" class="input" placeholder="ダブルクリックで選択 / 空欄で既定の OK フォルダ" style="cursor:pointer;">
           <button id="reviewBrowseApproveDirBtn" class="btn btn-secondary" type="button">参照</button>
         </div>
-        <p id="reviewApproveDirHelp" class="help-text">OK を押した動画はここへ移動します。</p>
+        <p id="reviewApproveDirHelp" class="help-text"></p>
       </div>
       <div class="top-control-card">
         <label class="card-label" for="reviewRejectDirInput">📁 ✕ 移動先フォルダ <span style="color:#6ee7b7;font-size:0.8rem;">（ダブルクリックで選択）</span></label>
@@ -933,16 +927,19 @@
           <input type="text" id="reviewRejectDirInput" class="input" placeholder="ダブルクリックで選択 / 空欄で既定の削除フォルダ" style="cursor:pointer;">
           <button id="reviewBrowseRejectDirBtn" class="btn btn-secondary" type="button">参照</button>
         </div>
-        <p id="reviewRejectDirHelp" class="help-text">✕ を押した動画はここへ移動します。</p>
+        <p id="reviewRejectDirHelp" class="help-text"></p>
       </div>
     </div>
 
     <section class="card">
       <div class="preview-header">
         <div>
-          <h3 class="section-title">プレビュー</h3>
+          <div class="preview-title-row">
+            <h3 class="section-title">プレビュー</h3>
+            <div id="playbackSpeedDisplay">1.0x</div>
+          </div>
           <div id="currentReviewFileName" class="current-file-name">動画が未選択です</div>
-          <div id="currentReviewFileMeta" class="current-file-meta">複数動画を読み込むと、ここに現在選択中の動画情報が表示されます。</div>
+          <div id="currentReviewFileMeta" class="current-file-meta"></div>
         </div>
         <div class="review-summary" id="reviewSummary"></div>
       </div>
@@ -957,14 +954,6 @@
         <button id="reviewUndoBtn" class="review-nav-btn review-undo-btn" type="button" title="直前の OK / 削除 を取り消す">戻る</button>
         <div id="reviewClipCarousel" class="review-carousel" aria-label="高速判定カード一覧"></div>
         <button id="reviewNextBtn" class="review-nav-btn" type="button" title="次の動画へ">▶</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <h3 class="section-title">再生速度</h3>
-      <div class="settings-box">
-        <div id="playbackSpeedDisplay">1.0x</div>
-        <p class="help-text">D = 速度UP / S = 速度DOWN</p>
       </div>
     </section>
 
