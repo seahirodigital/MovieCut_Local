@@ -1201,6 +1201,7 @@ async def delete_file(file_path: str = Form(...)):
 async def review_move_file(
     file_path: str = Form(...),
     target_directory: str = Form(...),
+    destination_name: str = Form(None),
 ):
     """指定された動画ファイルを任意の移動先フォルダへ移動する"""
     path = Path(file_path)
@@ -1232,7 +1233,7 @@ async def review_move_file(
         })
 
     try:
-        result = await execute_review_file_move(path, destination_dir)
+        result = await execute_review_file_move(path, destination_dir, destination_name=destination_name)
         result["queued"] = False
         result["queue_state"] = "completed" if not result.get("already_missing") else "already_missing"
         return JSONResponse(result)

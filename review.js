@@ -763,6 +763,11 @@ function renderReviewCards() {
       approveReviewItem(index);
     });
 
+    const deleteWrapper = document.createElement('div');
+    deleteWrapper.style.display = 'flex';
+    deleteWrapper.style.flexDirection = 'column';
+    deleteWrapper.style.gap = '6px';
+
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'review-action-btn delete';
@@ -773,9 +778,22 @@ function renderReviewCards() {
       deleteReviewItem(item.path);
     });
 
+    const starButton = document.createElement('button');
+    starButton.type = 'button';
+    starButton.className = 'review-action-btn ok';
+    starButton.textContent = isMoving ? '移動中' : '★';
+    starButton.disabled = isBusy;
+    starButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      starReviewItem(index);
+    });
+
+    deleteWrapper.appendChild(deleteButton);
+    deleteWrapper.appendChild(starButton);
+
     actionsDiv.appendChild(approveButton);
     actionsDiv.appendChild(playButton);
-    actionsDiv.appendChild(deleteButton);
+    actionsDiv.appendChild(deleteWrapper);
 
     const sliderWrap = document.createElement('div');
     sliderWrap.className = 'clip-slider-wrap';
@@ -1217,6 +1235,25 @@ async function deleteReviewItem(targetPath) {
   });
 }
 
+async function starReviewItem(index) {
+  if (index < 0 || index >= reviewItems.length) return;
+  const targetDir = getReviewApproveTargetDir().trim();
+  const item = reviewItems[index];
+
+  const dotOutputLimit = item.name.lastIndexOf('.');
+  const ext = dotOutputLimit > 0 ? item.name.slice(dotOutputLimit) : '';
+  const base = dotOutputLimit > 0 ? item.name.slice(0, dotOutputLimit) : item.name;
+  
+  const destinationName = `${base}★${ext}`;
+
+  await moveReviewItem(item.path, {
+    targetDirectory: targetDir,
+    actionLabel: '★',
+    successCountKey: 'approve',
+    destinationName: destinationName
+  });
+}
+
 async function moveReviewItem(targetPath, options = {}) {
   if (!targetPath || movingReviewPaths.has(targetPath) || reviewUndoInFlight) return;
 
@@ -1245,6 +1282,9 @@ async function moveReviewItem(targetPath, options = {}) {
     const formData = new FormData();
     formData.append('file_path', targetPath);
     formData.append('target_directory', targetDirectory);
+    if (options.destinationName) {
+      formData.append('destination_name', options.destinationName);
+    }
 
     const response = await fetch(`${API_BASE}/api/review/move-file`, {
       method: 'POST',
@@ -1400,6 +1440,12 @@ function handleKeyDown(e) {
       videoElement.playbackRate = playbackSpeed;
       updatePlaybackSpeedDisplay();
       addMessage(`再生速度を ${playbackSpeed.toFixed(1)}x にしました`, 'info');
+      break;
+    case '@':
+      e.preventDefault();
+      if (!e.repeat) {
+        starReviewItem(currentReviewIndex);
+      }
       break;
     case 's':
     case 'S':
