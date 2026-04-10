@@ -67,7 +67,7 @@ function getParentPath(filePath) {
 function applyReviewPlatformCopy() {
   const filePathsLabel = document.querySelector('label[for="reviewFilePathsInput"]');
   if (filePathsLabel) {
-    filePathsLabel.textContent = '📂 動画ファイルのパス （入力欄をダブルクリック→ファイル選択ダイアログで複数選択）';
+    filePathsLabel.textContent = '📂 動画ファイルのパス';
   }
 
   const filePathsInput = document.getElementById('reviewFilePathsInput');
@@ -582,7 +582,7 @@ function updateCurrentReviewInfo() {
 
   const item = getCurrentReviewItem();
   if (!item) {
-    nameElement.textContent = '動画を読み込んでください';
+    nameElement.textContent = '';
     metaElement.textContent = '';
     return;
   }
