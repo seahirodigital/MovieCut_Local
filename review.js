@@ -17,10 +17,26 @@ let isSidePanelOpen = false;
 let reviewSyncFrame = null;
 let activeWaveformToken = 0;
 let reviewUndoStack = [];
-let deletingReviewPaths = new Set();
+let movingReviewPaths = new Set();
 const maxUndoSteps = 50;
 let progressHideTimer = null;
-let reviewRejectDirLabel = '削除フォルダ';
+let reviewApproveDirPath = 'OKフォルダ';
+let reviewRejectDirPath = '削除フォルダ';
+let reviewApprovedMovedCount = 0;
+let reviewRejectedMovedCount = 0;
+let reviewUndoInFlight = false;
+
+function isPlaybackToggleKey(event) {
+  return event.code === 'Space'
+    || event.key === ' '
+    || event.key === 'Spacebar'
+    || event.key === ']'
+    || event.code === 'BracketRight'
+    || event.code === 'Backslash'
+    || event.code === 'IntlYen'
+    || event.key === '\\'
+    || event.key === '¥';
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -63,21 +79,33 @@ function applyReviewPlatformCopy() {
   if (sideNote) {
     sideNote.innerHTML = `
       <strong>高速判定ページについて</strong>
-      ここでは既に小分け済みの複数動画をまとめて読み込み、レビュー直下のカードで使える動画かどうかを高速に判定します。✕ は元ファイルを <code>${reviewRejectDirLabel}</code> へ移動待ち登録します。
+      ここでは既に小分け済みの複数動画をまとめて読み込み、レビュー直下のカードで使える動画かどうかを高速に判定します。OK は <code>${reviewApproveDirPath}</code>、✕ は <code>${reviewRejectDirPath}</code> へ移動し、カードは一覧から消えます。間違えたときは <code>戻る</code> または <code>Ctrl+Z</code> で 1 件ずつ元に戻せます。
     `;
   }
 
   const subtitle = document.querySelector('.subtitle');
   if (subtitle) {
-    subtitle.textContent = '既に小分け済みの複数動画を一括で読み込み、1本ずつ OK / 削除フォルダ移動待ち登録 を高速判定します。';
+    subtitle.textContent = '既に小分け済みの複数動画を一括で読み込み、1本ずつ OK / 削除 を指定フォルダへ移動しながら高速判定します。';
   }
 
-  const helpTexts = document.querySelectorAll('.top-control-card .help-text');
-  if (helpTexts[0]) {
-    helpTexts[0].textContent = '通常ページと同じ感覚で、入力欄のダブルクリックから複数ファイルを選択できます。手入力する場合は 1 行に 1 パスずつ入力してください。';
+  const filePathsHelp = document.getElementById('reviewFilePathsHelp');
+  if (filePathsHelp) {
+    filePathsHelp.textContent = '通常ページと同じ感覚で、入力欄のダブルクリックから複数ファイルを選択できます。手入力する場合は 1 行に 1 パスずつ入力してください。';
   }
-  if (helpTexts[1]) {
-    helpTexts[1].innerHTML = `Backspace / Delete は現在の動画を <code>${reviewRejectDirLabel}</code> へ移動待ち登録、Space は再生/停止、← → は 5 秒移動、D/S は再生速度変更です。`;
+
+  const shortcutHelp = document.getElementById('reviewShortcutHelp');
+  if (shortcutHelp) {
+    shortcutHelp.innerHTML = `Backspace / Delete / ✕ は <code>${reviewRejectDirPath}</code> へ移動、Enter / OK は <code>${reviewApproveDirPath}</code> へ移動、Ctrl+Z / 戻る は 1 件戻す、Space / ] / \\ は再生/停止、← → は 3 秒移動、D/S は再生速度変更です。`;
+  }
+
+  const approveDirHelp = document.getElementById('reviewApproveDirHelp');
+  if (approveDirHelp) {
+    approveDirHelp.innerHTML = `OK を押した動画は <code>${reviewApproveDirPath}</code> へ移動します。`;
+  }
+
+  const rejectDirHelp = document.getElementById('reviewRejectDirHelp');
+  if (rejectDirHelp) {
+    rejectDirHelp.innerHTML = `✕ を押した動画は <code>${reviewRejectDirPath}</code> へ移動します。`;
   }
 }
 
@@ -86,13 +114,17 @@ async function loadAppConfig() {
     const response = await fetch(`${API_BASE}/api/app-config`, { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
+    if (data.review_ok_dir) {
+      reviewApproveDirPath = data.review_ok_dir;
+    }
     if (data.review_reject_dir) {
-      reviewRejectDirLabel = data.review_reject_dir;
+      reviewRejectDirPath = data.review_reject_dir;
     }
   } catch (error) {
     console.warn('アプリ設定の取得に失敗しました:', error);
   }
 
+  syncReviewDestinationInputs();
   applyReviewPlatformCopy();
 }
 
@@ -162,6 +194,46 @@ function refreshPathsTextarea() {
   const textarea = document.getElementById('reviewFilePathsInput');
   if (!textarea) return;
   textarea.value = reviewItems.map((item) => item.path).join('\n');
+}
+
+function syncReviewDestinationInputs() {
+  const approveInput = document.getElementById('reviewApproveDirInput');
+  const rejectInput = document.getElementById('reviewRejectDirInput');
+
+  if (approveInput) approveInput.value = reviewApproveDirPath;
+  if (rejectInput) rejectInput.value = reviewRejectDirPath;
+}
+
+function getReviewApproveTargetDir() {
+  const input = document.getElementById('reviewApproveDirInput');
+  return (input && input.value.trim()) || reviewApproveDirPath;
+}
+
+function getReviewRejectTargetDir() {
+  const input = document.getElementById('reviewRejectDirInput');
+  return (input && input.value.trim()) || reviewRejectDirPath;
+}
+
+async function openReviewDirectoryDialog(inputId, successLabel) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+
+  try {
+    const response = await fetch(`${API_BASE}/api/dialog/open-directory`, { cache: 'no-store' });
+    const data = await response.json();
+
+    if (data.success && data.path) {
+      input.value = data.path;
+      addMessage(`${successLabel}: ${data.path}`, 'success');
+      return;
+    }
+
+    if (data.error) {
+      addMessage(`${successLabel}を開けませんでした: ${data.error}`, 'warning');
+    }
+  } catch (error) {
+    addMessage(`${successLabel}を開けませんでした。直接パスを入力するか、参照ボタンを押してください`, 'warning');
+  }
 }
 
 function toggleSidePanel(forceOpen) {
@@ -493,13 +565,16 @@ function updateClipPreviewSliderFill(slider) {
 function updateSummaryLabels() {
   const fileCountValue = document.getElementById('reviewFileCountValue');
   const approvedCountValue = document.getElementById('reviewApprovedCountValue');
+  const rejectedCountValue = document.getElementById('reviewRejectedCountValue');
   const currentValue = document.getElementById('reviewCurrentValue');
   if (fileCountValue) fileCountValue.textContent = String(reviewItems.length);
   if (approvedCountValue) {
-    approvedCountValue.textContent = String(reviewItems.filter((item) => item.approved).length);
+    approvedCountValue.textContent = String(reviewApprovedMovedCount);
   }
+  if (rejectedCountValue) rejectedCountValue.textContent = String(reviewRejectedMovedCount);
   if (currentValue) {
-    currentValue.textContent = reviewItems.length === 0 ? '0 / 0' : `${currentReviewIndex + 1} / ${reviewItems.length}`;
+    const currentNumber = currentReviewIndex >= 0 ? currentReviewIndex + 1 : 0;
+    currentValue.textContent = reviewItems.length === 0 ? '0 / 0' : `${currentNumber} / ${reviewItems.length}`;
   }
 }
 
@@ -507,14 +582,15 @@ function updateReviewSummary() {
   const summary = document.getElementById('reviewSummary');
   if (!summary) return;
 
-  const approvedCount = reviewItems.filter((item) => item.approved).length;
-  const undecidedCount = Math.max(0, reviewItems.length - approvedCount);
-  const currentLabel = reviewItems.length === 0 ? '未選択' : `${currentReviewIndex + 1} / ${reviewItems.length}`;
+  const currentLabel = reviewItems.length === 0
+    ? '未選択'
+    : `${currentReviewIndex >= 0 ? currentReviewIndex + 1 : 0} / ${reviewItems.length}`;
 
   summary.innerHTML =
     `<span class="review-summary-chip">現在 ${currentLabel}</span>` +
-    `<span class="review-summary-chip">OK ${approvedCount}</span>` +
-    `<span class="review-summary-chip">未判定 ${undecidedCount}</span>`;
+    `<span class="review-summary-chip">残り ${reviewItems.length}</span>` +
+    `<span class="review-summary-chip">OK移動 ${reviewApprovedMovedCount}</span>` +
+    `<span class="review-summary-chip">削除移動 ${reviewRejectedMovedCount}</span>`;
 }
 
 function updateCurrentReviewInfo() {
@@ -529,15 +605,20 @@ function updateCurrentReviewInfo() {
     return;
   }
 
+  const statusText = movingReviewPaths.has(item.path)
+    ? '移動中'
+    : (reviewUndoInFlight ? '更新中' : '未処理');
   nameElement.textContent = item.name;
   metaElement.textContent =
-    `パス: ${item.path} | 長さ: ${formatTime(item.duration)} | サイズ: ${item.fileSizeMb.toFixed(2)} MB | 状態: ${item.approved ? 'OK' : '未判定'}`;
+    `パス: ${item.path} | 長さ: ${formatTime(item.duration)} | サイズ: ${item.fileSizeMb.toFixed(2)} MB | 状態: ${statusText}`;
 }
 
 function updateNavigationButtons() {
   const prevBtn = document.getElementById('reviewPrevBtn');
+  const undoBtn = document.getElementById('reviewUndoBtn');
   const nextBtn = document.getElementById('reviewNextBtn');
   if (prevBtn) prevBtn.disabled = reviewItems.length === 0 || currentReviewIndex <= 0;
+  if (undoBtn) undoBtn.disabled = reviewUndoInFlight || reviewUndoStack.length === 0;
   if (nextBtn) nextBtn.disabled = reviewItems.length === 0 || currentReviewIndex >= reviewItems.length - 1;
 }
 
@@ -569,7 +650,7 @@ function syncReviewCards() {
       : clamp(item.previewTime || 0, 0, item.duration || 0);
 
     card.classList.toggle('selected', isSelected);
-    card.classList.toggle('approved', !!item.approved);
+    card.classList.toggle('disabled', movingReviewPaths.has(item.path) || reviewUndoInFlight);
     card.classList.toggle('playback-active', isSelected && !!videoElement && !videoElement.paused);
 
     const slider = card.querySelector('.clip-preview-slider');
@@ -579,13 +660,16 @@ function syncReviewCards() {
     if (slider) {
       slider.max = String(item.duration || 0);
       slider.value = String(currentTime);
+      slider.disabled = movingReviewPaths.has(item.path) || reviewUndoInFlight;
       updateClipPreviewSliderFill(slider);
     }
 
     if (currentLabel) currentLabel.textContent = formatTime(currentTime);
     if (statusBadge) {
-      statusBadge.textContent = item.approved ? 'OK' : '未判定';
-      statusBadge.className = item.approved ? 'review-ok-badge' : 'clip-item-badge';
+      statusBadge.textContent = movingReviewPaths.has(item.path)
+        ? '移動中'
+        : (reviewUndoInFlight ? '更新中' : '未処理');
+      statusBadge.className = 'clip-item-badge';
       statusBadge.dataset.role = 'status';
     }
   });
@@ -626,11 +710,12 @@ function renderReviewCards() {
   }
 
   reviewItems.forEach((item, index) => {
+    const isMoving = movingReviewPaths.has(item.path);
+    const isBusy = isMoving || reviewUndoInFlight;
     const card = document.createElement('div');
     card.className = 'clip-item review-clip-card';
     if (index === currentReviewIndex) card.classList.add('selected');
-    if (item.approved) card.classList.add('approved');
-    if (deletingReviewPaths.has(item.path)) card.classList.add('disabled');
+    if (isBusy) card.classList.add('disabled');
     card.dataset.index = String(index);
 
     const indexBadge = document.createElement('div');
@@ -663,9 +748,9 @@ function renderReviewCards() {
     sizeElement.textContent = `${item.fileSizeMb.toFixed(2)} MB`;
 
     const statusElement = document.createElement('span');
-    statusElement.className = item.approved ? 'review-ok-badge' : 'clip-item-badge';
+    statusElement.className = 'clip-item-badge';
     statusElement.dataset.role = 'status';
-    statusElement.textContent = item.approved ? 'OK' : '未判定';
+    statusElement.textContent = isMoving ? '移動中' : (reviewUndoInFlight ? '更新中' : '未処理');
 
     metaDiv.appendChild(durationElement);
     metaDiv.appendChild(sizeElement);
@@ -680,6 +765,7 @@ function renderReviewCards() {
     playButton.style.background = '#8b5cf6';
     playButton.title = 'この動画を再生';
     playButton.textContent = '▶';
+    playButton.disabled = isBusy;
     playButton.addEventListener('click', (e) => {
       e.stopPropagation();
       playReviewItem(index);
@@ -688,7 +774,8 @@ function renderReviewCards() {
     const approveButton = document.createElement('button');
     approveButton.type = 'button';
     approveButton.className = 'review-action-btn ok';
-    approveButton.textContent = 'OK';
+    approveButton.textContent = isMoving ? '移動中' : 'OK';
+    approveButton.disabled = isBusy;
     approveButton.addEventListener('click', (e) => {
       e.stopPropagation();
       approveReviewItem(index);
@@ -697,15 +784,15 @@ function renderReviewCards() {
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'review-action-btn delete';
-    deleteButton.textContent = deletingReviewPaths.has(item.path) ? '削除中' : '✕';
-    deleteButton.disabled = deletingReviewPaths.has(item.path);
+    deleteButton.textContent = isMoving ? '移動中' : '✕';
+    deleteButton.disabled = isBusy;
     deleteButton.addEventListener('click', (e) => {
       e.stopPropagation();
       deleteReviewItem(item.path);
     });
 
-    actionsDiv.appendChild(playButton);
     actionsDiv.appendChild(approveButton);
+    actionsDiv.appendChild(playButton);
     actionsDiv.appendChild(deleteButton);
 
     const sliderWrap = document.createElement('div');
@@ -718,6 +805,7 @@ function renderReviewCards() {
     slider.max = String(item.duration || 0);
     slider.step = '0.05';
     slider.value = String(index === currentReviewIndex && videoElement ? videoElement.currentTime || 0 : item.previewTime || 0);
+    slider.disabled = isBusy;
     updateClipPreviewSliderFill(slider);
 
     const sliderStatus = document.createElement('div');
@@ -975,7 +1063,11 @@ async function loadReviewFiles(paths) {
 
   activeWaveformToken += 1;
   reviewUndoStack = [];
+  reviewUndoInFlight = false;
   reviewItems = [];
+  movingReviewPaths = new Set();
+  reviewApprovedMovedCount = 0;
+  reviewRejectedMovedCount = 0;
   currentReviewIndex = -1;
   clearCurrentVideo();
   renderReviewCards();
@@ -1049,7 +1141,11 @@ function handleLoadFiles() {
 function handleClearFiles() {
   activeWaveformToken += 1;
   reviewUndoStack = [];
+  reviewUndoInFlight = false;
   reviewItems = [];
+  movingReviewPaths = new Set();
+  reviewApprovedMovedCount = 0;
+  reviewRejectedMovedCount = 0;
   currentReviewIndex = -1;
   refreshPathsTextarea();
   clearCurrentVideo();
@@ -1058,75 +1154,122 @@ function handleClearFiles() {
   addMessage('入力済みの動画一覧をクリアしました', 'info');
 }
 
-function saveApprovalUndoState() {
-  reviewUndoStack.push({
-    currentPath: getCurrentReviewItem() ? getCurrentReviewItem().path : null,
-    items: reviewItems.map((item) => ({
-      path: item.path,
-      approved: !!item.approved,
-    })),
-  });
-
+function pushReviewUndoEntry(entry) {
+  reviewUndoStack.push(entry);
   if (reviewUndoStack.length > maxUndoSteps) {
     reviewUndoStack.shift();
   }
 }
 
-function handleUndoApproval() {
+async function handleUndoMove() {
+  if (reviewUndoInFlight) return;
   if (reviewUndoStack.length === 0) {
-    addMessage('元に戻せる OK 判定がありません', 'warning');
+    addMessage('戻せる OK / 削除 はありません', 'warning');
+    return;
+  }
+  if (movingReviewPaths.size > 0) {
+    addMessage('移動処理が終わってから戻してください', 'warning');
     return;
   }
 
-  const snapshot = reviewUndoStack.pop();
-  const approvedMap = new Map(snapshot.items.map((item) => [item.path, item.approved]));
-  reviewItems.forEach((item) => {
-    item.approved = !!approvedMap.get(item.path);
-  });
-
-  if (snapshot.currentPath) {
-    const restoredIndex = reviewItems.findIndex((item) => item.path === snapshot.currentPath);
-    if (restoredIndex >= 0) currentReviewIndex = restoredIndex;
-  }
-
+  const snapshot = reviewUndoStack[reviewUndoStack.length - 1];
+  reviewUndoInFlight = true;
   renderReviewCards();
   updateCurrentReviewInfo();
-  scrollReviewCardIntoView(currentReviewIndex, 'smooth');
-  addMessage('OK 判定を 1 手戻しました', 'success');
+
+  try {
+    const formData = new FormData();
+    formData.append('moved_file_path', snapshot.movedToPath);
+    formData.append('original_path', snapshot.originalPath);
+
+    const response = await fetch(`${API_BASE}/api/review/restore-file`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error || data.success === false) {
+      throw new Error(data.error || '動画の復元に失敗しました');
+    }
+
+    reviewUndoStack.pop();
+    if (snapshot.successCountKey === 'approve') {
+      reviewApprovedMovedCount = Math.max(0, reviewApprovedMovedCount - 1);
+    }
+    if (snapshot.successCountKey === 'reject') {
+      reviewRejectedMovedCount = Math.max(0, reviewRejectedMovedCount - 1);
+    }
+
+    const restoredItem = {
+      ...snapshot.item,
+      path: data.restored_path || snapshot.originalPath,
+    };
+
+    reviewItems.unshift(restoredItem);
+    refreshPathsTextarea();
+    await selectReviewItem(0, {
+      behavior: 'auto',
+      previewTime: Number.isFinite(restoredItem.previewTime) ? restoredItem.previewTime : 0,
+    });
+    addMessage(`${restoredItem.name} を元の場所へ戻して先頭に復帰しました`, 'success');
+  } catch (error) {
+    addMessage(error.message || '動画の復元に失敗しました', 'error');
+  } finally {
+    reviewUndoInFlight = false;
+    renderReviewCards();
+    updateCurrentReviewInfo();
+  }
 }
 
 async function approveReviewItem(index) {
   if (index < 0 || index >= reviewItems.length) return;
-
-  saveApprovalUndoState();
-  reviewItems[index].approved = true;
-  renderReviewCards();
-  updateCurrentReviewInfo();
-  addMessage(`${reviewItems[index].name} を OK にしました`, 'success');
-
-  if (index < reviewItems.length - 1) {
-    await selectReviewItem(index + 1, { behavior: 'smooth' });
-  } else {
-    scrollReviewCardIntoView(index, 'smooth');
-  }
+  const targetDir = getReviewApproveTargetDir().trim();
+  await moveReviewItem(reviewItems[index].path, {
+    targetDirectory: targetDir,
+    actionLabel: 'OK',
+    successCountKey: 'approve',
+  });
 }
 
 async function deleteReviewItem(targetPath) {
-  if (!targetPath || deletingReviewPaths.has(targetPath)) return;
+  const targetDir = getReviewRejectTargetDir().trim();
+  await moveReviewItem(targetPath, {
+    targetDirectory: targetDir,
+    actionLabel: '削除',
+    successCountKey: 'reject',
+  });
+}
+
+async function moveReviewItem(targetPath, options = {}) {
+  if (!targetPath || movingReviewPaths.has(targetPath) || reviewUndoInFlight) return;
+
+  const targetDirectory = String(options.targetDirectory || '').trim();
+  if (!targetDirectory) {
+    addMessage(`${options.actionLabel || '移動'}先フォルダを設定してください`, 'warning');
+    return;
+  }
 
   const initialIndex = findReviewIndexByPath(targetPath);
   if (initialIndex < 0) return;
   const item = reviewItems[initialIndex];
-  deletingReviewPaths.add(targetPath);
+  const itemSnapshot = {
+    ...item,
+    previewTime: initialIndex === currentReviewIndex && videoElement
+      ? clamp(videoElement.currentTime || 0, 0, item.duration || videoElement.duration || 0)
+      : (Number.isFinite(item.previewTime) ? item.previewTime : 0),
+  };
+  movingReviewPaths.add(targetPath);
   renderReviewCards();
+  updateCurrentReviewInfo();
 
   try {
     await releaseVideoHandle(targetPath);
 
     const formData = new FormData();
     formData.append('file_path', targetPath);
+    formData.append('target_directory', targetDirectory);
 
-    const response = await fetch(`${API_BASE}/api/delete-file`, {
+    const response = await fetch(`${API_BASE}/api/review/move-file`, {
       method: 'POST',
       body: formData,
     });
@@ -1134,28 +1277,43 @@ async function deleteReviewItem(targetPath) {
     const data = await response.json();
     const resolvedIndex = findReviewIndexByPath(targetPath);
     if (resolvedIndex < 0) {
-      deletingReviewPaths.delete(targetPath);
+      movingReviewPaths.delete(targetPath);
       renderReviewCards();
+      updateCurrentReviewInfo();
       return;
     }
 
-    const deletingCurrent = resolvedIndex === currentReviewIndex;
-    const deletingBeforeCurrent = resolvedIndex < currentReviewIndex;
+    const movingCurrent = resolvedIndex === currentReviewIndex;
+    const movingBeforeCurrent = resolvedIndex < currentReviewIndex;
     const alreadyMissing = data.already_missing === true;
-    const queuedMove = data.queued === true;
 
-    if ((!response.ok || data.error) && !alreadyMissing && !queuedMove) {
+    if (!response.ok || data.error) {
       throw new Error(data.error || '動画の移動に失敗しました');
     }
+    if (!alreadyMissing && !data.moved_to_path) {
+      throw new Error('移動先ファイルの情報取得に失敗しました');
+    }
 
+    if (!alreadyMissing) {
+      if (options.successCountKey === 'approve') reviewApprovedMovedCount += 1;
+      if (options.successCountKey === 'reject') reviewRejectedMovedCount += 1;
+      pushReviewUndoEntry({
+        actionLabel: options.actionLabel || '移動',
+        successCountKey: options.successCountKey || '',
+        originalPath: targetPath,
+        movedToPath: data.moved_to_path,
+        item: itemSnapshot,
+      });
+    }
+
+    const resolvedTargetDir = data.target_directory || targetDirectory;
     const moveMessage = alreadyMissing
       ? `${item.name} は既に存在しなかったため、カードを除去しました`
-      : `${item.name} を削除フォルダへの移動待ちにしました`;
+      : `${item.name} を ${options.actionLabel}先 ${resolvedTargetDir} へ移動しました`;
 
     reviewItems.splice(resolvedIndex, 1);
-    deletingReviewPaths.delete(targetPath);
+    movingReviewPaths.delete(targetPath);
     refreshPathsTextarea();
-    reviewUndoStack = [];
 
     if (reviewItems.length === 0) {
       currentReviewIndex = -1;
@@ -1169,7 +1327,7 @@ async function deleteReviewItem(targetPath) {
       return;
     }
 
-    if (deletingCurrent) {
+    if (movingCurrent) {
       currentReviewIndex = -1;
       clearCurrentVideo();
       renderReviewCards();
@@ -1179,7 +1337,7 @@ async function deleteReviewItem(targetPath) {
       return;
     }
 
-    if (deletingBeforeCurrent) {
+    if (movingBeforeCurrent) {
       currentReviewIndex = Math.max(0, currentReviewIndex - 1);
     }
 
@@ -1187,8 +1345,9 @@ async function deleteReviewItem(targetPath) {
     updateCurrentReviewInfo();
     addMessage(moveMessage, alreadyMissing ? 'warning' : 'success');
   } catch (error) {
-    deletingReviewPaths.delete(targetPath);
+    movingReviewPaths.delete(targetPath);
     renderReviewCards();
+    updateCurrentReviewInfo();
     addMessage(error.message, 'error');
   }
 }
@@ -1212,32 +1371,43 @@ function handleKeyDown(e) {
   const isTypingTarget = target && (target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select');
   if (isTypingTarget) return;
 
-  if (e.key === 'z' || e.key === 'Z') {
+  if ((e.key === 'z' || e.key === 'Z') && reviewUndoStack.length > 0) {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      handleUndoApproval();
+      handleUndoMove();
     }
     return;
   }
 
+  if (reviewUndoInFlight) return;
   if (currentReviewIndex < 0 || !videoElement) return;
 
-  switch (e.key) {
-    case ' ':
-      e.preventDefault();
+  if (isPlaybackToggleKey(e)) {
+    e.preventDefault();
+    if (!e.repeat) {
       if (videoElement.paused) {
         videoElement.play().catch(() => {});
       } else {
         videoElement.pause();
       }
+    }
+    return;
+  }
+
+  switch (e.key) {
+    case 'Enter':
+      e.preventDefault();
+      if (!e.repeat) {
+        approveReviewItem(currentReviewIndex);
+      }
       break;
     case 'ArrowLeft':
       e.preventDefault();
-      videoElement.currentTime = Math.max(0, (videoElement.currentTime || 0) - 5);
+      videoElement.currentTime = Math.max(0, (videoElement.currentTime || 0) - 3);
       break;
     case 'ArrowRight':
       e.preventDefault();
-      videoElement.currentTime = Math.min(videoElement.duration || 0, (videoElement.currentTime || 0) + 5);
+      videoElement.currentTime = Math.min(videoElement.duration || 0, (videoElement.currentTime || 0) + 3);
       break;
     case 'Backspace':
     case 'Delete':
@@ -1279,7 +1449,12 @@ function init() {
   const reviewBrowseFilesBtn = document.getElementById('reviewBrowseFilesBtn');
   const reviewLoadFilesBtn = document.getElementById('reviewLoadFilesBtn');
   const reviewClearFilesBtn = document.getElementById('reviewClearFilesBtn');
+  const reviewApproveDirInput = document.getElementById('reviewApproveDirInput');
+  const reviewRejectDirInput = document.getElementById('reviewRejectDirInput');
+  const reviewBrowseApproveDirBtn = document.getElementById('reviewBrowseApproveDirBtn');
+  const reviewBrowseRejectDirBtn = document.getElementById('reviewBrowseRejectDirBtn');
   const reviewPrevBtn = document.getElementById('reviewPrevBtn');
+  const reviewUndoBtn = document.getElementById('reviewUndoBtn');
   const reviewNextBtn = document.getElementById('reviewNextBtn');
   const reviewFilePathsInput = document.getElementById('reviewFilePathsInput');
 
@@ -1289,7 +1464,30 @@ function init() {
   if (reviewBrowseFilesBtn) reviewBrowseFilesBtn.addEventListener('click', handleBrowseFiles);
   if (reviewLoadFilesBtn) reviewLoadFilesBtn.addEventListener('click', handleLoadFiles);
   if (reviewClearFilesBtn) reviewClearFilesBtn.addEventListener('click', handleClearFiles);
+  if (reviewApproveDirInput) {
+    reviewApproveDirInput.title = 'ダブルクリックでフォルダ選択ダイアログを開く';
+    reviewApproveDirInput.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      openReviewDirectoryDialog('reviewApproveDirInput', 'OK移動先');
+    });
+  }
+  if (reviewRejectDirInput) {
+    reviewRejectDirInput.title = 'ダブルクリックでフォルダ選択ダイアログを開く';
+    reviewRejectDirInput.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      openReviewDirectoryDialog('reviewRejectDirInput', '✕移動先');
+    });
+  }
+  if (reviewBrowseApproveDirBtn) {
+    reviewBrowseApproveDirBtn.addEventListener('click', () => openReviewDirectoryDialog('reviewApproveDirInput', 'OK移動先'));
+  }
+  if (reviewBrowseRejectDirBtn) {
+    reviewBrowseRejectDirBtn.addEventListener('click', () => openReviewDirectoryDialog('reviewRejectDirInput', '✕移動先'));
+  }
   if (reviewPrevBtn) reviewPrevBtn.addEventListener('click', () => moveReviewFocus(-1));
+  if (reviewUndoBtn) reviewUndoBtn.addEventListener('click', () => {
+    handleUndoMove();
+  });
   if (reviewNextBtn) reviewNextBtn.addEventListener('click', () => moveReviewFocus(1));
 
   if (reviewFilePathsInput) {
@@ -1354,7 +1552,7 @@ function init() {
   drawTimeline();
 
   addMessage('高速判定ページを開きました。複数の小さな動画を読み込むと、OK と削除を横スクロールで素早く判定できます。', 'info');
-  addMessage('ショートカット: Space 再生 / ←→ 5秒移動 / D・S 速度変更 / Delete 削除 / Ctrl+Z OK取り消し', 'info');
+  addMessage('ショートカット: Space・]・\\ 再生 / Enter OK移動 / Ctrl+Z・戻る 1件復元 / ←→ 3秒移動 / Backspace・Delete 削除移動 / D・S 速度変更', 'info');
 }
 
 if (document.readyState === 'loading') {

@@ -137,8 +137,16 @@ def get_default_review_reject_dir() -> Path:
     )
 
 
+def get_default_review_ok_dir() -> Path:
+    return get_env_path(
+        "MOVIE_AUTOCUT_REVIEW_OK_DIR",
+        get_default_auto_export_output_dir() / "SNSで採用",
+    )
+
+
 REVIEW_REJECT_DIR = get_default_review_reject_dir()
-REVIEW_REJECT_FAILURE_LOG = TEMP_DIR / "review_reject_move_failures.log"
+REVIEW_OK_DIR = get_default_review_ok_dir()
+REVIEW_MOVE_FAILURE_LOG = TEMP_DIR / "review_move_failures.log"
 
 # WebSocket接続の管理
 active_connections: list[WebSocket] = []
@@ -205,11 +213,11 @@ def build_unique_destination_path(destination_dir: Path, original_name: str) -> 
         counter += 1
 
 
-def append_review_reject_failure(source_path: str, error_message: str):
+def append_review_move_failure(source_path: str, destination_dir: str, error_message: str):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    with REVIEW_REJECT_FAILURE_LOG.open("a", encoding="utf-8") as log_file:
+    with REVIEW_MOVE_FAILURE_LOG.open("a", encoding="utf-8") as log_file:
         log_file.write(
-            f"[{timestamp}] {source_path} -> {REVIEW_REJECT_DIR}\n"
+            f"[{timestamp}] {source_path} -> {destination_dir}\n"
             f"{error_message}\n\n"
         )
 
@@ -271,58 +279,113 @@ async def wait_for_video_release(file_path: str | Path, timeout_sec: float = 2.5
     return get_active_video_stream_count(file_path)
 
 
-async def process_review_reject_move(file_path: str):
+async def execute_review_file_move(
+    file_path: str | Path,
+    target_directory: str | Path,
+    *,
+    destination_name: str | None = None,
+    require_original_name: bool = False,
+) -> dict:
     normalized_path = normalize_managed_path(file_path)
     source_path = Path(normalized_path)
+    destination_dir = Path(target_directory).expanduser()
+    normalized_destination_dir = normalize_managed_path(destination_dir)
     last_error = None
 
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + 45.0
+
+    while time.monotonic() < deadline:
+        if not source_path.exists():
+            return {
+                "success": True,
+                "already_missing": True,
+                "moved_from_path": normalized_path,
+                "target_directory": normalized_destination_dir,
+                "moved_name": destination_name or source_path.name,
+            }
+
+        active_count = await wait_for_video_release(source_path, timeout_sec=0.8, poll_interval_sec=0.08)
+        if active_count > 0:
+            last_error = RuntimeError(f"動画配信ストリームが {active_count} 件残っています")
+            await asyncio.sleep(0.25)
+            continue
+
+        try:
+            if destination_name:
+                destination_path = destination_dir / destination_name
+                if require_original_name and destination_path.exists():
+                    raise FileExistsError(f"元の場所に同名ファイルが既にあります: {destination_path}")
+                if not require_original_name and destination_path.exists():
+                    destination_path = build_unique_destination_path(destination_dir, destination_name)
+            else:
+                destination_path = build_unique_destination_path(destination_dir, source_path.name)
+
+            await asyncio.to_thread(shutil.move, str(source_path), str(destination_path))
+            normalized_destination_path = normalize_managed_path(destination_path)
+            for stale_path in {
+                str(source_path),
+                normalized_path,
+                str(destination_path),
+                normalized_destination_path,
+            }:
+                analysis_state_by_file.pop(stale_path, None)
+
+            return {
+                "success": True,
+                "already_missing": False,
+                "moved_from_path": normalized_path,
+                "moved_to_path": normalized_destination_path,
+                "target_directory": normalized_destination_dir,
+                "moved_name": destination_path.name,
+            }
+        except FileNotFoundError:
+            return {
+                "success": True,
+                "already_missing": True,
+                "moved_from_path": normalized_path,
+                "target_directory": normalized_destination_dir,
+                "moved_name": destination_name or source_path.name,
+            }
+        except FileExistsError:
+            raise
+        except PermissionError as e:
+            last_error = e
+            await asyncio.sleep(0.25)
+        except OSError as e:
+            last_error = e
+            await asyncio.sleep(0.25)
+
+    raise RuntimeError(str(last_error or "移動先フォルダへの移動がタイムアウトしました"))
+
+
+async def process_review_reject_move(file_path: str, target_directory: str):
+    normalized_path = normalize_managed_path(file_path)
+    destination_dir = Path(target_directory)
+
     try:
-        REVIEW_REJECT_DIR.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + 45.0
-
-        while time.monotonic() < deadline:
-            if not source_path.exists():
-                return
-
-            active_count = await wait_for_video_release(source_path, timeout_sec=0.8, poll_interval_sec=0.08)
-            if active_count > 0:
-                last_error = RuntimeError(f"動画配信ストリームが {active_count} 件残っています")
-                await asyncio.sleep(0.25)
-                continue
-
-            try:
-                destination_path = build_unique_destination_path(REVIEW_REJECT_DIR, source_path.name)
-                await asyncio.to_thread(shutil.move, str(source_path), str(destination_path))
-                analysis_state_by_file.pop(str(source_path), None)
-                analysis_state_by_file.pop(normalized_path, None)
-                return
-            except FileNotFoundError:
-                return
-            except PermissionError as e:
-                last_error = e
-                await asyncio.sleep(0.25)
-            except OSError as e:
-                last_error = e
-                await asyncio.sleep(0.25)
-
-        append_review_reject_failure(
+        await execute_review_file_move(normalized_path, destination_dir)
+    except Exception as e:
+        append_review_move_failure(
             normalized_path,
-            str(last_error or "削除フォルダへの移動がタイムアウトしました"),
+            str(destination_dir),
+            str(e),
         )
     finally:
         with review_reject_task_lock:
             queued_review_reject_tasks.pop(normalized_path, None)
 
 
-def queue_review_reject_move(file_path: str | Path) -> str:
+def queue_review_reject_move(file_path: str | Path, target_directory: str | Path) -> str:
     normalized_path = normalize_managed_path(file_path)
+    normalized_target_directory = normalize_managed_path(target_directory)
     with review_reject_task_lock:
         existing_task = queued_review_reject_tasks.get(normalized_path)
         if existing_task and not existing_task.done():
             return "already_queued"
 
         queued_review_reject_tasks[normalized_path] = asyncio.create_task(
-            process_review_reject_move(normalized_path)
+            process_review_reject_move(normalized_path, normalized_target_directory)
         )
     return "queued"
 
@@ -556,7 +619,7 @@ async def detect_spikes(
     loud_threshold_db: float = Form(-38),
     duration_sec: float = Form(1.0),
     min_gap: float = Form(35.0),
-    clip_duration: float = Form(40.0),
+    clip_duration: float = Form(32.0),
 ):
     """
     音量継続検出 API
@@ -1034,6 +1097,7 @@ async def open_folder(path: str):
 async def get_app_config():
     return JSONResponse({
         "platform": sys.platform,
+        "review_ok_dir": str(REVIEW_OK_DIR),
         "review_reject_dir": str(REVIEW_REJECT_DIR),
         "auto_export_source_dir": str(get_default_auto_export_source_dir()),
         "auto_export_output_dir": str(get_default_auto_export_output_dir()),
@@ -1112,7 +1176,7 @@ async def dialog_open_directory():
 
         dir_path = filedialog.askdirectory(
             parent=root,
-            title="保存先フォルダを選択",
+            title="フォルダを選択",
             mustexist=True,
         )
 
@@ -1129,35 +1193,118 @@ async def dialog_open_directory():
 
 @app.post("/api/delete-file")
 async def delete_file(file_path: str = Form(...)):
-    """指定された動画ファイルを削除フォルダ移動キューへ登録する"""
+    """指定された動画ファイルを削除フォルダへ移動する"""
+    return await review_move_file(file_path=file_path, target_directory=str(REVIEW_REJECT_DIR))
+
+
+@app.post("/api/review/move-file")
+async def review_move_file(
+    file_path: str = Form(...),
+    target_directory: str = Form(...),
+):
+    """指定された動画ファイルを任意の移動先フォルダへ移動する"""
     path = Path(file_path)
+    target_text = str(target_directory or "").strip()
+    if not target_text:
+        return JSONResponse({"error": "移動先フォルダが未設定です"}, status_code=400)
+
+    destination_dir = Path(target_text).expanduser()
 
     if path.exists() and not path.is_file():
         return JSONResponse({"error": f"ファイルではありません: {file_path}"}, status_code=400)
 
-    REVIEW_REJECT_DIR.mkdir(parents=True, exist_ok=True)
+    if destination_dir.exists() and not destination_dir.is_dir():
+        return JSONResponse({"error": f"移動先がフォルダではありません: {target_directory}"}, status_code=400)
+
     normalized_path = normalize_managed_path(path)
+    normalized_destination_dir = normalize_managed_path(destination_dir)
+
+    if path.exists() and normalize_managed_path(path.parent) == normalized_destination_dir:
+        return JSONResponse({"error": "元ファイルと同じフォルダは指定できません"}, status_code=400)
 
     if not path.exists():
         return JSONResponse({
             "success": True,
             "already_missing": True,
-            "queued": False,
-            "queue_state": "already_missing",
             "moved_from_path": normalized_path,
-            "target_directory": str(REVIEW_REJECT_DIR),
+            "target_directory": normalized_destination_dir,
             "moved_name": path.name,
         })
 
-    queue_state = queue_review_reject_move(path)
-    return JSONResponse({
-        "success": True,
-        "queued": True,
-        "queue_state": queue_state,
-        "moved_from_path": normalized_path,
-        "target_directory": str(REVIEW_REJECT_DIR),
-        "moved_name": path.name,
-    })
+    try:
+        result = await execute_review_file_move(path, destination_dir)
+        result["queued"] = False
+        result["queue_state"] = "completed" if not result.get("already_missing") else "already_missing"
+        return JSONResponse(result)
+    except FileExistsError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/review/restore-file")
+async def review_restore_file(
+    moved_file_path: str = Form(...),
+    original_path: str = Form(...),
+):
+    """移動済み動画を元のパスへ戻す"""
+    moved_path = Path(moved_file_path)
+    original_target_path = Path(original_path).expanduser()
+    original_text = str(original_path or "").strip()
+    if not original_text:
+        return JSONResponse({"error": "元のファイルパスが未設定です"}, status_code=400)
+
+    if moved_path.exists() and not moved_path.is_file():
+        return JSONResponse({"error": f"戻し元がファイルではありません: {moved_file_path}"}, status_code=400)
+
+    if original_target_path.exists() and not original_target_path.is_file():
+        return JSONResponse({"error": f"元の復元先がファイルではありません: {original_path}"}, status_code=400)
+
+    normalized_moved_path = normalize_managed_path(moved_path)
+    normalized_original_path = normalize_managed_path(original_target_path)
+
+    if moved_path.exists() and normalized_moved_path == normalized_original_path:
+        return JSONResponse({
+            "success": True,
+            "already_restored": True,
+            "restored_path": normalized_original_path,
+            "restored_name": original_target_path.name,
+        })
+
+    if original_target_path.exists() and normalized_moved_path != normalized_original_path:
+        return JSONResponse(
+            {"error": f"元の場所に同名ファイルが既にあります: {normalized_original_path}"},
+            status_code=409,
+        )
+
+    if not moved_path.exists():
+        if original_target_path.exists():
+            return JSONResponse({
+                "success": True,
+                "already_restored": True,
+                "restored_path": normalized_original_path,
+                "restored_name": original_target_path.name,
+            })
+        return JSONResponse({"error": f"戻し元ファイルが見つかりません: {moved_file_path}"}, status_code=404)
+
+    try:
+        result = await execute_review_file_move(
+            moved_path,
+            original_target_path.parent,
+            destination_name=original_target_path.name,
+            require_original_name=True,
+        )
+        return JSONResponse({
+            "success": True,
+            "already_restored": False,
+            "moved_from_path": result.get("moved_from_path", normalized_moved_path),
+            "restored_path": result.get("moved_to_path", normalized_original_path),
+            "restored_name": result.get("moved_name", original_target_path.name),
+        })
+    except FileExistsError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ===== WebSocket エンドポイント =====

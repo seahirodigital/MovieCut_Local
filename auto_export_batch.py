@@ -33,7 +33,7 @@ DEFAULT_DETECT_SETTINGS = {
     "loud_threshold_db": -15.0,
     "duration_sec": 23.0,
     "min_gap": 1.0,
-    "clip_duration": 28.0,
+    "clip_duration": 32.0,
 }
 
 DEFAULT_EXPORT_SETTINGS = {

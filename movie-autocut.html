@@ -1358,7 +1358,7 @@
     </div>
     <div class="side-panel-note">
       <strong>高速判定の使い方</strong>
-      OK で次カードへ移動、✕ で削除、左右の矢印でカードをスキップできます。再生ボタン、波形スライダー、タイムライン編集、既存ショートカットはそのまま使えます。
+      OK または Enter で次カードへ移動、✕ / Backspace / Delete で削除、Space / ] / \ で再生停止、左右の矢印でカードをスキップできます。再生ボタン、波形スライダー、タイムライン編集もそのまま使えます。
     </div>
   </aside>
 
@@ -1468,7 +1468,7 @@
       </div>
 
       <p class="help-text" style="margin-top:8px">💡 緑=通常 赤=削除対象 | タイムラインドラッグで表示位置移動 | Ctrl+クリックで複数選択 | キー: Ctrl+Z=元に戻す
-        / Space=再生/停止 / ←→=5秒移動 / P=追加 / Backspace=削除 / Shift+ホイール=ズーム</p>
+        / Space・]・\=再生/停止 / ←→=5秒移動 / P=追加 / Backspace・Delete=削除 / reviewビューでは Enter=OK・次カード / Shift+ホイール=ズーム</p>
 
       <div style="margin-top:15px;display:flex;gap:15px;align-items:center;flex-wrap:wrap">
         <button id="downloadSegmentsBtn" class="btn btn-secondary" style="display:none;margin:0">💾 編集した動画を作成</button>
@@ -3488,7 +3488,7 @@
       saveState();
 
       const duration = videoElement.duration;
-      const defaultDuration = parseFloat(document.getElementById('clipDuration').value) || 10;
+      const defaultDuration = parseFloat(document.getElementById('clipDuration').value) || 32;
       const newStart = videoElement.currentTime || 0;
       const newEnd = Math.min(newStart + defaultDuration, duration);
 

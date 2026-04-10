@@ -42,6 +42,18 @@ let currentWorkspaceMode = 'editor';
 let reviewApprovedClips = new Set();
 let isSidePanelOpen = false;
 
+function isPlaybackToggleKey(event) {
+  return event.code === 'Space'
+    || event.key === ' '
+    || event.key === 'Spacebar'
+    || event.key === ']'
+    || event.code === 'BracketRight'
+    || event.code === 'Backslash'
+    || event.code === 'IntlYen'
+    || event.key === '\\'
+    || event.key === '¥';
+}
+
 // 圧縮機能用
 let compressVideoDuration = 0;
 let isCompressing = false;
@@ -886,8 +898,8 @@ function handleKeyDown(e) {
 
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
 
-  // スペースキー: repeatを無視してトグル（押しっぱなし対応）
-  if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar') {
+  // 再生/停止キー: repeatを無視してトグル（押しっぱなし対応）
+  if (isPlaybackToggleKey(e)) {
     e.preventDefault();
     if (!e.repeat) {
       videoElement.paused ? videoElement.play() : videoElement.pause();
@@ -903,6 +915,14 @@ function handleKeyDown(e) {
     case 'ArrowRight':
       e.preventDefault();
       videoElement.currentTime = Math.min(videoElement.duration, videoElement.currentTime + 5);
+      break;
+    case 'Enter':
+      if (currentWorkspaceMode === 'review' && selectedClipIndex >= 0 && clips[selectedClipIndex]) {
+        e.preventDefault();
+        if (!e.repeat) {
+          approveReviewClip(selectedClipIndex);
+        }
+      }
       break;
     case 'p':
     case 'P':
@@ -2076,8 +2096,8 @@ function updateReviewClipList() {
       deleteSingleClip(index);
     });
 
-    actionsDiv.appendChild(playButton);
     actionsDiv.appendChild(approveButton);
+    actionsDiv.appendChild(playButton);
     actionsDiv.appendChild(deleteButton);
 
     const sliderWrap = document.createElement('div');
