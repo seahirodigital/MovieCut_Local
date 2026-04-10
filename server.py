@@ -157,6 +157,15 @@ active_video_stream_counts: dict[str, int] = {}
 video_stream_lock = threading.Lock()
 queued_review_reject_tasks: dict[str, asyncio.Task] = {}
 review_reject_task_lock = threading.Lock()
+export_state_lock = threading.Lock()
+active_export_state = {
+    "active": False,
+    "stop_requested": False,
+    "process": None,
+    "current_clip": 0,
+    "total_clips": 0,
+    "message": "",
+}
 
 
 # ===== ユーティリティ =====
@@ -400,6 +409,194 @@ async def run_process_capture(cmd: list[str]) -> tuple[int, bytes, bytes]:
     return process.returncode, stdout or b"", stderr or b""
 
 
+def begin_export_session(total_clips: int) -> bool:
+    with export_state_lock:
+        if active_export_state["active"]:
+            return False
+        active_export_state.update({
+            "active": True,
+            "stop_requested": False,
+            "process": None,
+            "current_clip": 0,
+            "total_clips": total_clips,
+            "message": "",
+        })
+    return True
+
+
+def finish_export_session():
+    with export_state_lock:
+        active_export_state.update({
+            "active": False,
+            "stop_requested": False,
+            "process": None,
+            "current_clip": 0,
+            "total_clips": 0,
+            "message": "",
+        })
+
+
+def is_export_stop_requested() -> bool:
+    with export_state_lock:
+        return bool(active_export_state["stop_requested"])
+
+
+def update_export_session_status(current_clip: int, total_clips: int, message: str):
+    with export_state_lock:
+        active_export_state["current_clip"] = current_clip
+        active_export_state["total_clips"] = total_clips
+        active_export_state["message"] = message
+
+
+def set_active_export_process(process):
+    with export_state_lock:
+        active_export_state["process"] = process
+
+
+def clear_active_export_process(process=None):
+    with export_state_lock:
+        current_process = active_export_state["process"]
+        if process is None or current_process is process:
+            active_export_state["process"] = None
+
+
+def request_export_stop() -> tuple[bool, bool]:
+    with export_state_lock:
+        if not active_export_state["active"]:
+            return False, False
+
+        active_export_state["stop_requested"] = True
+        process = active_export_state["process"]
+
+    if process is None:
+        return True, False
+
+    try:
+        if process.returncode is None:
+            process.terminate()
+            return True, True
+    except ProcessLookupError:
+        pass
+    except Exception:
+        return True, False
+
+    return True, False
+
+
+async def run_managed_export_process(cmd: list[str]) -> tuple[int, bytes, bytes, bool]:
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    set_active_export_process(process)
+    try:
+        stdout, stderr = await process.communicate()
+    finally:
+        clear_active_export_process(process)
+
+    return process.returncode, stdout or b"", stderr or b"", is_export_stop_requested()
+
+
+def parse_export_video_mode(video_bitrate: str | int) -> tuple[str, int | None]:
+    raw_value = str(video_bitrate).strip().lower()
+    if raw_value in {"copy", "no-compress", "nocompress", "no_compress"}:
+        return "copy", None
+
+    try:
+        return "reencode", max(1, int(float(raw_value)))
+    except ValueError as e:
+        raise ValueError(f"映像ビットレートの指定が不正です: {video_bitrate}") from e
+
+
+def build_export_output_filename(source_path: Path, start: float, end: float, export_mode: str) -> str:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    start_sec = int(start)
+    end_sec = int(end)
+    suffix = source_path.suffix if export_mode == "copy" and source_path.suffix else ".mp4"
+    return f"{timestamp}_{start_sec:02d}-{end_sec:02d}{suffix}"
+
+
+def build_export_command(
+    file_path: str,
+    start: float,
+    duration_sec: float,
+    output_path: str,
+    fps: int,
+    video_bitrate: int | None,
+    audio_bitrate: int,
+    export_mode: str,
+) -> list[str]:
+    if export_mode == "copy":
+        copy_cmd = [
+            FFMPEG, "-y",
+            "-ss", str(start),
+            "-i", file_path,
+            "-t", str(duration_sec),
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+        ]
+        if Path(output_path).suffix.lower() in {".mp4", ".mov", ".m4v"}:
+            copy_cmd.extend(["-movflags", "+faststart"])
+        copy_cmd.append(output_path)
+        return copy_cmd
+
+    return [
+        FFMPEG, "-y",
+        "-ss", str(start),
+        "-i", file_path,
+        "-t", str(duration_sec),
+        "-c:v", "libx264",
+        "-profile:v", "high",
+        "-level", "4.2",
+        "-preset", "veryslow",
+        "-pix_fmt", "yuv420p",
+        "-b:v", f"{video_bitrate}k",
+        "-maxrate", f"{video_bitrate}k",
+        "-bufsize", f"{video_bitrate*2}k",
+        "-r", str(fps),
+        "-c:a", "aac",
+        "-b:a", f"{audio_bitrate}k",
+        "-movflags", "+faststart",
+        "-avoid_negative_ts", "make_zero",
+        output_path,
+    ]
+
+
+def quote_concat_file_path(file_path: str) -> str:
+    normalized_path = Path(file_path).expanduser().as_posix()
+    escaped_path = normalized_path.replace("'", r"'\''")
+    return f"file '{escaped_path}'\n"
+
+
+async def write_concat_list_file(file_paths: list[str]) -> str:
+    temp_fd, concat_list_path = tempfile.mkstemp(prefix="concat_", suffix=".txt", dir=str(TEMP_DIR))
+    with os.fdopen(temp_fd, "w", encoding="utf-8") as concat_file:
+        for file_path in file_paths:
+            concat_file.write(quote_concat_file_path(file_path))
+    return concat_list_path
+
+
+async def broadcast_export_progress(
+    message: str,
+    percent: float,
+    current_clip: int,
+    total_clips: int,
+    phase: str,
+):
+    update_export_session_status(current_clip, total_clips, message)
+    await broadcast_progress(
+        message,
+        percent,
+        "export_progress",
+        {
+            "current_clip": current_clip,
+            "total_clips": total_clips,
+            "phase": phase,
+        },
+    )
+
+
 def build_waveform_data(raw_path: str, sample_rate: int, samples_per_second: int = 10) -> list[dict]:
     raw_data = np.fromfile(raw_path, dtype=np.int16)
     audio_data = raw_data.astype(np.float32) / 32768.0
@@ -422,13 +619,22 @@ def build_waveform_data(raw_path: str, sample_rate: int, samples_per_second: int
     return waveform
 
 
-async def broadcast_progress(message: str, percent: float, msg_type: str = "progress"):
+async def broadcast_progress(
+    message: str,
+    percent: float,
+    msg_type: str = "progress",
+    extra: dict | None = None,
+):
     """全WebSocketクライアントに進捗を送信"""
-    data = json.dumps({
+    payload = {
         "type": msg_type,
         "message": message,
         "percent": round(percent, 1)
-    })
+    }
+    if extra:
+        payload.update(extra)
+
+    data = json.dumps(payload)
     for ws in active_connections:
         try:
             await ws.send_text(data)
@@ -712,117 +918,178 @@ def _calculate_rms(segment: list) -> float:
     return math.sqrt(total / len(segment))
 
 
+async def export_clips_internal(
+    file_path: str,
+    clips_json: str,
+    output_dir: str,
+    fps: int,
+    video_bitrate: str,
+    audio_bitrate: int,
+):
+    if not os.path.exists(file_path):
+        return JSONResponse({"error": f"ファイルが見つかりません: {file_path}"}, status_code=400)
+
+    try:
+        clips = json.loads(clips_json)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "クリップ情報の形式が不正です"}, status_code=400)
+
+    if not clips:
+        return JSONResponse({"error": "クリップがありません"}, status_code=400)
+
+    if not output_dir or not os.path.isdir(output_dir):
+        output_dir = str(Path(file_path).parent)
+
+    try:
+        export_mode, normalized_video_bitrate = parse_export_video_mode(video_bitrate)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    if not begin_export_session(len(clips)):
+        return JSONResponse({"error": "別の書き出し処理が進行中です。停止または完了を待ってください"}, status_code=409)
+
+    source_path = Path(file_path)
+    results = []
+    cancelled = False
+
+    try:
+        for i, clip in enumerate(clips):
+            if is_export_stop_requested():
+                cancelled = True
+                break
+
+            start = clip["start"]
+            end = clip["end"]
+            duration_sec = end - start
+            current_clip = i + 1
+            total_clips = len(clips)
+
+            await broadcast_export_progress(
+                f"クリップ {current_clip}/{total_clips} を書き出し中... ({format_time(start)} → {format_time(end)})",
+                (i / total_clips) * 100,
+                current_clip,
+                total_clips,
+                "encoding",
+            )
+
+            output_filename = build_export_output_filename(source_path, start, end, export_mode)
+            output_path = os.path.join(output_dir, output_filename)
+            cmd = build_export_command(
+                file_path=file_path,
+                start=start,
+                duration_sec=duration_sec,
+                output_path=output_path,
+                fps=fps,
+                video_bitrate=normalized_video_bitrate,
+                audio_bitrate=audio_bitrate,
+                export_mode=export_mode,
+            )
+
+            returncode, _, stderr, was_cancelled = await run_managed_export_process(cmd)
+
+            if was_cancelled:
+                cancelled = True
+                break
+
+            if returncode != 0:
+                error_text = stderr.decode("utf-8", errors="replace")
+                results.append({
+                    "clip": current_clip,
+                    "success": False,
+                    "error": error_text[:200]
+                })
+                await broadcast_progress(
+                    f"クリップ {current_clip} でエラー発生",
+                    (i / total_clips) * 100,
+                    "error",
+                    {
+                        "current_clip": current_clip,
+                        "total_clips": total_clips,
+                        "phase": "error",
+                    },
+                )
+                continue
+
+            file_size = os.path.getsize(output_path)
+            results.append({
+                "clip": current_clip,
+                "success": True,
+                "path": output_path,
+                "filename": output_filename,
+                "size_mb": round(file_size / (1024 * 1024), 2),
+                "export_mode": export_mode,
+            })
+            await broadcast_progress(
+                f"クリップ {current_clip} 完了 ({output_filename})",
+                (current_clip / total_clips) * 100,
+                "clip_done",
+                {
+                    "current_clip": current_clip,
+                    "total_clips": total_clips,
+                    "phase": "clip_done",
+                },
+            )
+    finally:
+        finish_export_session()
+
+    if cancelled:
+        completed_count = len([result for result in results if result.get("success")])
+        await broadcast_progress(
+            f"書き出しを停止しました ({completed_count}/{len(clips)} 完了)",
+            (completed_count / len(clips)) * 100 if clips else 0,
+            "export_progress",
+            {
+                "current_clip": completed_count,
+                "total_clips": len(clips),
+                "phase": "cancelled",
+            },
+        )
+        return JSONResponse({
+            "success": True,
+            "cancelled": True,
+            "results": results,
+            "output_dir": output_dir,
+        })
+
+    await broadcast_progress(
+        "全クリップの書き出しが完了しました!",
+        100,
+        "export_progress",
+        {
+            "current_clip": len(clips),
+            "total_clips": len(clips),
+            "phase": "complete",
+        },
+    )
+
+    return JSONResponse({
+        "success": True,
+        "results": results,
+        "output_dir": output_dir
+    })
+
+
 @app.post("/api/export-clips")
 async def export_clips(
     file_path: str = Form(...),
     clips_json: str = Form(...),
     output_dir: str = Form(""),
     fps: int = Form(30),
-    video_bitrate: int = Form(4500),
+    video_bitrate: str = Form("4500"),
     audio_bitrate: int = Form(128),
 ):
     """
     動画クリップ切り出し API
     FFmpegでフレーム精度の切り出しを実行
     """
-    if not os.path.exists(file_path):
-        return JSONResponse({"error": f"ファイルが見つかりません: {file_path}"}, status_code=400)
-    
-    clips = json.loads(clips_json)
-    
-    if not clips:
-        return JSONResponse({"error": "クリップがありません"}, status_code=400)
-    
-    # 出力先ディレクトリ
-    if not output_dir or not os.path.isdir(output_dir):
-        output_dir = str(Path(file_path).parent)
-    
-    base_name = Path(file_path).stem
-    results = []
-    
-    for i, clip in enumerate(clips):
-        start = clip["start"]
-        end = clip["end"]
-        duration_sec = end - start
-        
-        await broadcast_progress(
-            f"クリップ {i+1}/{len(clips)} を書き出し中... ({format_time(start)} → {format_time(end)})",
-            (i / len(clips)) * 100
-        )
-        
-        # ファイル名生成
-        import datetime
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y%m%d_%H%M%S")
-        start_sec = int(start)
-        end_sec = int(end)
-        output_filename = f"{date_str}_{start_sec:02d}-{end_sec:02d}.mp4"
-        output_path = os.path.join(output_dir, output_filename)
-        
-        # FFmpegコマンド (軽量化・指定ビットレートに準拠するための最適化)
-        cmd = [
-            FFMPEG, "-y",
-            "-ss", str(start),           # シーク（入力前に置くことで高速化）
-            "-i", file_path,
-            "-t", str(duration_sec),      # 長さ
-            
-            # X(Twitter)最適化用・高圧縮のエンコード設定
-            "-c:v", "libx264",
-            "-profile:v", "high",        # 高画質プロファイル
-            "-level", "4.2",             # 高品質維持レベル
-            "-preset", "veryslow",       # 極限まで圧縮(処理は遅くなるがファイルサイズと画質の比率が最も良い)
-            "-pix_fmt", "yuv420p",       # X(Twitter)などWeb標準互換に必須
-            
-            # ビットレートを厳格に制限する（Twitter等の軽量化目的のため）
-            "-b:v", f"{video_bitrate}k",
-            "-maxrate", f"{video_bitrate}k",
-            "-bufsize", f"{video_bitrate*2}k",
-
-            "-r", str(fps),              # FPS
-            "-c:a", "aac",               # 音声コーデック
-            "-b:a", f"{audio_bitrate}k", # 音声ビットレート
-            "-movflags", "+faststart",   # Web最適化
-            "-avoid_negative_ts", "make_zero",
-            output_path
-        ]
-        
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        _, stderr = process.communicate()
-        
-        if process.returncode != 0:
-            error_text = stderr.decode("utf-8", errors="replace")
-            results.append({
-                "clip": i + 1,
-                "success": False,
-                "error": error_text[:200]
-            })
-            await broadcast_progress(f"クリップ {i+1} でエラー発生", (i / len(clips)) * 100, "error")
-        else:
-            file_size = os.path.getsize(output_path)
-            results.append({
-                "clip": i + 1,
-                "success": True,
-                "path": output_path,
-                "filename": output_filename,
-                "size_mb": round(file_size / (1024 * 1024), 2)
-            })
-            await broadcast_progress(
-                f"クリップ {i+1} 完了 ({output_filename})",
-                ((i + 1) / len(clips)) * 100,
-                "clip_done"
-            )
-    
-    await broadcast_progress("全クリップの書き出しが完了しました!", 100)
-    
-    return JSONResponse({
-        "success": True,
-        "results": results,
-        "output_dir": output_dir
-    })
+    return await export_clips_internal(
+        file_path=file_path,
+        clips_json=clips_json,
+        output_dir=output_dir,
+        fps=fps,
+        video_bitrate=video_bitrate,
+        audio_bitrate=audio_bitrate,
+    )
 
 
 @app.post("/api/export-clips-async")
@@ -831,91 +1098,128 @@ async def export_clips_async(
     clips_json: str = Form(...),
     output_dir: str = Form(""),
     fps: int = Form(30),
-    video_bitrate: int = Form(4500),
+    video_bitrate: str = Form("4500"),
     audio_bitrate: int = Form(128),
 ):
-    if not os.path.exists(file_path):
-        return JSONResponse({"error": f"ファイルが見つかりません: {file_path}"}, status_code=400)
+    return await export_clips_internal(
+        file_path=file_path,
+        clips_json=clips_json,
+        output_dir=output_dir,
+        fps=fps,
+        video_bitrate=video_bitrate,
+        audio_bitrate=audio_bitrate,
+    )
 
-    clips = json.loads(clips_json)
-    if not clips:
-        return JSONResponse({"error": "クリップがありません"}, status_code=400)
+
+@app.post("/api/export-stop")
+async def export_stop():
+    stop_requested, signal_sent = request_export_stop()
+    if not stop_requested:
+        return JSONResponse({"success": False, "error": "停止できる書き出し処理がありません"}, status_code=409)
+
+    with export_state_lock:
+        snapshot_total = int(active_export_state.get("total_clips", 0) or 0)
+        snapshot_current = int(active_export_state.get("current_clip", 0) or 0)
+    await broadcast_progress(
+        "書き出し停止を要求しました...",
+        (snapshot_current / snapshot_total) * 100 if snapshot_total else 0,
+        "export_progress",
+        {
+            "current_clip": snapshot_current,
+            "total_clips": snapshot_total,
+            "phase": "stopping",
+        },
+    )
+    return JSONResponse({"success": True, "signal_sent": signal_sent})
+
+
+@app.post("/api/merge-videos")
+async def merge_videos(
+    file_paths_json: str = Form(...),
+    output_dir: str = Form(""),
+    merge_mode: str = Form("auto"),
+):
+    try:
+        raw_paths = json.loads(file_paths_json)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "結合対象の動画一覧の形式が不正です"}, status_code=400)
+
+    if not isinstance(raw_paths, list) or len(raw_paths) < 2:
+        return JSONResponse({"error": "2本以上の動画を指定してください"}, status_code=400)
+
+    file_paths = [str(Path(path).expanduser()) for path in raw_paths if str(path).strip()]
+    if len(file_paths) < 2:
+        return JSONResponse({"error": "2本以上の動画を指定してください"}, status_code=400)
+
+    for file_path in file_paths:
+        if not os.path.isfile(file_path):
+            return JSONResponse({"error": f"動画ファイルが見つかりません: {file_path}"}, status_code=400)
 
     if not output_dir or not os.path.isdir(output_dir):
-        output_dir = str(Path(file_path).parent)
+        output_dir = str(Path(file_paths[0]).parent)
 
-    results = []
+    merge_mode = str(merge_mode or "auto").strip().lower()
+    source_suffixes = {Path(path).suffix.lower() for path in file_paths if Path(path).suffix}
+    output_suffix = ".mp4"
+    if merge_mode == "copy" and len(source_suffixes) == 1:
+        output_suffix = next(iter(source_suffixes))
 
-    for i, clip in enumerate(clips):
-        start = clip["start"]
-        end = clip["end"]
-        duration_sec = end - start
+    output_filename = f"{time.strftime('%Y%m%d_%H%M%S')}_merged{output_suffix}"
+    output_path = os.path.join(output_dir, output_filename)
+    concat_list_path = await write_concat_list_file(file_paths)
 
-        await broadcast_progress(
-            f"クリップ {i+1}/{len(clips)} を書き出し中... ({format_time(start)} → {format_time(end)})",
-            (i / len(clips)) * 100
-        )
+    try:
+        await broadcast_progress(f"{len(file_paths)}本の動画結合を準備中...", 5)
 
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        start_sec = int(start)
-        end_sec = int(end)
-        output_filename = f"{timestamp}_{start_sec:02d}-{end_sec:02d}.mp4"
-        output_path = os.path.join(output_dir, output_filename)
-
-        cmd = [
+        copy_cmd = [
             FFMPEG, "-y",
-            "-ss", str(start),
-            "-i", file_path,
-            "-t", str(duration_sec),
-            "-c:v", "libx264",
-            "-profile:v", "high",
-            "-level", "4.2",
-            "-preset", "veryslow",
-            "-pix_fmt", "yuv420p",
-            "-b:v", f"{video_bitrate}k",
-            "-maxrate", f"{video_bitrate}k",
-            "-bufsize", f"{video_bitrate*2}k",
-            "-r", str(fps),
-            "-c:a", "aac",
-            "-b:a", f"{audio_bitrate}k",
-            "-movflags", "+faststart",
-            "-avoid_negative_ts", "make_zero",
-            output_path
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_list_path,
+            "-c", "copy",
+            output_path,
         ]
+        returncode, _, stderr = await run_process_capture(copy_cmd)
+        merge_method = "copy"
 
-        returncode, _, stderr = await run_process_capture(cmd)
+        if returncode != 0 and merge_mode != "copy":
+            await broadcast_progress("結合形式を調整して再処理中...", 45)
+            output_path = os.path.join(output_dir, f"{time.strftime('%Y%m%d_%H%M%S')}_merged.mp4")
+            encode_cmd = [
+                FFMPEG, "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_list_path,
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+            returncode, _, stderr = await run_process_capture(encode_cmd)
+            merge_method = "reencode"
 
         if returncode != 0:
             error_text = stderr.decode("utf-8", errors="replace")
-            results.append({
-                "clip": i + 1,
-                "success": False,
-                "error": error_text[:200]
-            })
-            await broadcast_progress(f"クリップ {i+1} でエラー発生", (i / len(clips)) * 100, "error")
-            continue
+            return JSONResponse({"error": f"動画結合に失敗しました: {error_text[:500]}"}, status_code=500)
 
-        file_size = os.path.getsize(output_path)
-        results.append({
-            "clip": i + 1,
+        merged_size = os.path.getsize(output_path)
+        await broadcast_progress("動画結合が完了しました!", 100)
+        return JSONResponse({
             "success": True,
-            "path": output_path,
-            "filename": output_filename,
-            "size_mb": round(file_size / (1024 * 1024), 2)
+            "output_path": output_path,
+            "output_filename": os.path.basename(output_path),
+            "output_dir": output_dir,
+            "file_count": len(file_paths),
+            "size_mb": round(merged_size / (1024 * 1024), 2),
+            "merge_method": merge_method,
         })
-        await broadcast_progress(
-            f"クリップ {i+1} 完了 ({output_filename})",
-            ((i + 1) / len(clips)) * 100,
-            "clip_done"
-        )
-
-    await broadcast_progress("全クリップの書き出しが完了しました!", 100)
-
-    return JSONResponse({
-        "success": True,
-        "results": results,
-        "output_dir": output_dir
-    })
+    finally:
+        try:
+            os.remove(concat_list_path)
+        except OSError:
+            pass
 
 
 @app.post("/api/compress")

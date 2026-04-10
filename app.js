@@ -41,6 +41,18 @@ let currentPlaybackClipIndex = -1;
 let currentWorkspaceMode = 'editor';
 let reviewApprovedClips = new Set();
 let isSidePanelOpen = false;
+let isMerging = false;
+let lastExportedFilePaths = [];
+let exportUiState = {
+  active: false,
+  button: null,
+  originalHtml: '',
+  originalTitle: '',
+  totalClips: 0,
+  currentClip: 0,
+  stage: '',
+  stopping: false
+};
 
 function isPlaybackToggleKey(event) {
   return event.code === 'Space'
@@ -112,10 +124,15 @@ function handleServerMessage(data) {
     case 'progress':
       updateProgress(data.message, data.percent);
       break;
+    case 'export_progress':
+      updateProgress(data.message, data.percent);
+      handleExportProgressMessage(data);
+      break;
     case 'compress_progress':
       updateCompressProgress(data.message, data.percent);
       break;
     case 'clip_done':
+      handleExportProgressMessage(data);
       addMessage(data.message, 'success');
       break;
     case 'error':
@@ -132,6 +149,262 @@ setInterval(() => {
     ws.send('ping');
   }
 }, 15000);
+
+
+function getVideoBitrateSelection() {
+  const bitrateInput = document.getElementById('bitrateInput');
+  return (bitrateInput && bitrateInput.value) ? bitrateInput.value : '2500';
+}
+
+function isActiveExportStopButton(button) {
+  return !!button && exportUiState.active && exportUiState.button === button;
+}
+
+function formatActiveExportButtonLabel() {
+  const totalClips = Math.max(0, exportUiState.totalClips || 0);
+  const currentClip = totalClips > 0 ? Math.min(totalClips, Math.max(1, exportUiState.currentClip || 1)) : 0;
+  const countText = totalClips > 0 ? `${currentClip}/${totalClips}` : '';
+  const stageText = exportUiState.stage || '書き出し中';
+
+  if (exportUiState.button && exportUiState.button.classList.contains('btn-small')) {
+    return exportUiState.stopping ? '⏳' : '⏹';
+  }
+
+  const prefix = exportUiState.stopping ? '⏳ 停止中' : '⏹ 停止';
+  return [prefix, countText, stageText].filter(Boolean).join(' | ');
+}
+
+function renderActiveExportButton() {
+  if (!exportUiState.active || !exportUiState.button) return;
+
+  if (!exportUiState.button.classList.contains('btn-small')) {
+    exportUiState.button.classList.remove('btn-secondary', 'btn-danger');
+    exportUiState.button.classList.add('btn-primary');
+  }
+  exportUiState.button.disabled = false;
+  exportUiState.button.innerHTML = formatActiveExportButtonLabel();
+
+  if (exportUiState.button.classList.contains('btn-small')) {
+    const totalClips = Math.max(1, exportUiState.totalClips || 1);
+    const currentClip = Math.min(totalClips, Math.max(1, exportUiState.currentClip || 1));
+    exportUiState.button.title = `${currentClip}/${totalClips} ${exportUiState.stage || '書き出し中'}`;
+  }
+}
+
+function beginExportButtonState(button, totalClips, stageText) {
+  if (!button) return;
+
+  exportUiState = {
+    active: true,
+    button,
+    originalHtml: button.innerHTML,
+    originalTitle: button.title || '',
+    totalClips: totalClips || 0,
+    currentClip: totalClips > 0 ? 1 : 0,
+    stage: stageText || '書き出し準備中',
+    stopping: false
+  };
+  renderActiveExportButton();
+}
+
+function updateExportButtonState(patch = {}) {
+  if (!exportUiState.active) return;
+  exportUiState = { ...exportUiState, ...patch };
+  renderActiveExportButton();
+}
+
+function resetExportButtonState() {
+  if (!exportUiState.button) {
+    exportUiState = {
+      active: false,
+      button: null,
+      originalHtml: '',
+      originalTitle: '',
+      totalClips: 0,
+      currentClip: 0,
+      stage: '',
+      stopping: false
+    };
+    return;
+  }
+
+  exportUiState.button.innerHTML = exportUiState.originalHtml;
+  exportUiState.button.title = exportUiState.originalTitle;
+  exportUiState.button.disabled = false;
+  exportUiState = {
+    active: false,
+    button: null,
+    originalHtml: '',
+    originalTitle: '',
+    totalClips: 0,
+    currentClip: 0,
+    stage: '',
+    stopping: false
+  };
+}
+
+function updateLastExportedFiles(results = []) {
+  lastExportedFilePaths = results
+    .filter((result) => result && result.success && result.path)
+    .map((result) => result.path);
+  refreshMergeSectionState();
+}
+
+function refreshMergeSectionState() {
+  const mergeStatus = document.getElementById('mergeStatus');
+  const mergeLastExportsBtn = document.getElementById('mergeLastExportsBtn');
+  const mergeSelectVideosBtn = document.getElementById('mergeSelectVideosBtn');
+
+  if (mergeStatus) {
+    if (lastExportedFilePaths.length >= 2) {
+      mergeStatus.textContent = `直前の細切れ出力: ${lastExportedFilePaths.length}本を結合できます`;
+    } else if (lastExportedFilePaths.length === 1) {
+      mergeStatus.textContent = '直前の細切れ出力が1本だけなので、結合には2本以上必要です';
+    } else {
+      mergeStatus.textContent = 'まだ細切れ出力結果がありません';
+    }
+  }
+
+  if (mergeLastExportsBtn) {
+    mergeLastExportsBtn.disabled = isMerging || isProcessing || lastExportedFilePaths.length < 2;
+  }
+  if (mergeSelectVideosBtn) {
+    mergeSelectVideosBtn.disabled = isMerging || isProcessing;
+  }
+}
+
+async function requestExportStop() {
+  if (!exportUiState.active || exportUiState.stopping) return;
+
+  updateExportButtonState({ stopping: true, stage: '停止要求を送信中' });
+
+  try {
+    const response = await fetch(`${API_BASE}/api/export-stop`, { method: 'POST' });
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      updateExportButtonState({ stopping: false, stage: '停止要求に失敗' });
+      addMessage(data.error || '書き出し停止に失敗しました', 'error');
+      return;
+    }
+
+    updateExportButtonState({ stage: '停止処理中' });
+    addMessage('書き出し停止を要求しました', 'warning');
+  } catch (error) {
+    updateExportButtonState({ stopping: false, stage: '停止要求に失敗' });
+    addMessage(`書き出し停止エラー: ${error.message}`, 'error');
+  }
+}
+
+function handleExportProgressMessage(data) {
+  const phaseMap = {
+    encoding: 'FFmpeg書き出し中',
+    clip_done: 'クリップ保存完了',
+    stopping: '停止処理中',
+    cancelled: '停止完了',
+    complete: '全クリップ完了'
+  };
+
+  updateExportButtonState({
+    currentClip: Number.isFinite(data.current_clip) ? data.current_clip : exportUiState.currentClip,
+    totalClips: Number.isFinite(data.total_clips) ? data.total_clips : exportUiState.totalClips,
+    stage: phaseMap[data.phase] || data.message || exportUiState.stage,
+    stopping: data.phase === 'stopping' ? true : exportUiState.stopping
+  });
+}
+
+async function openMultipleVideoFilesDialog() {
+  const response = await fetch(`${API_BASE}/api/dialog/open-files`, { cache: 'no-store' });
+  const data = await response.json();
+
+  if (!response.ok || data.error) {
+    throw new Error(data.error || '動画選択ダイアログを開けませんでした');
+  }
+
+  if (!data.success || !Array.isArray(data.paths) || data.paths.length === 0) {
+    return [];
+  }
+
+  return data.paths;
+}
+
+async function mergeVideoFiles(filePaths, options = {}) {
+  if (isMerging) {
+    addMessage('動画結合はすでに進行中です', 'warning');
+    return null;
+  }
+
+  if (isProcessing) {
+    addMessage('書き出し中は動画結合を開始できません', 'warning');
+    return null;
+  }
+
+  if (!Array.isArray(filePaths) || filePaths.length < 2) {
+    addMessage('動画結合には2本以上の動画が必要です', 'warning');
+    return null;
+  }
+
+  const button = options.button || null;
+  const originalHtml = button ? button.innerHTML : '';
+  const outputDir = document.getElementById('outputDirInput').value.trim() || '';
+  const progressContainer = document.getElementById('progressContainer');
+
+  isMerging = true;
+  refreshMergeSectionState();
+
+  if (button) {
+    button.innerHTML = '結合中...';
+    button.disabled = true;
+  }
+
+  if (progressContainer) {
+    progressContainer.style.display = 'block';
+  }
+  updateProgress(`動画 ${filePaths.length} 本を結合中...`, 5);
+  addMessage(options.startMessage || `動画 ${filePaths.length} 本を結合しています...`, 'info');
+
+  try {
+    const params = new URLSearchParams({
+      file_paths_json: JSON.stringify(filePaths),
+      output_dir: outputDir,
+      merge_mode: options.mergeMode || 'auto'
+    });
+
+    const response = await fetch(`${API_BASE}/api/merge-videos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      addMessage(data.error || '動画結合に失敗しました', 'error');
+      return null;
+    }
+
+    addMessage(`🎞️ ${data.file_count}本の動画を1本に結合しました`, 'success');
+    addMessage(`📁 保存先: ${data.output_path}`, 'info');
+    addMessage(`⚙️ 結合方式: ${data.merge_method === 'copy' ? 'コピー結合' : '再エンコード結合'}`, 'info');
+    fetch(`${API_BASE}/api/open-folder?path=${encodeURIComponent(data.output_path)}`).catch(() => {});
+    updateProgress('動画結合が完了しました', 100);
+    return data;
+  } catch (error) {
+    addMessage(`動画結合エラー: ${error.message}`, 'error');
+    return null;
+  } finally {
+    isMerging = false;
+    if (button) {
+      button.innerHTML = originalHtml;
+      button.disabled = false;
+    }
+    refreshMergeSectionState();
+    setTimeout(() => {
+      if (!isProcessing) {
+        document.getElementById('progressContainer').style.display = 'none';
+      }
+    }, 2000);
+  }
+}
 
 
 async function openOutputDirectoryDialog() {
@@ -291,6 +564,8 @@ function init() {
   const closeSettingsBtn = document.getElementById('closeSettingsBtn');
   const reviewPrevBtn = document.getElementById('reviewPrevBtn');
   const reviewNextBtn = document.getElementById('reviewNextBtn');
+  const mergeLastExportsBtn = document.getElementById('mergeLastExportsBtn');
+  const mergeSelectVideosBtn = document.getElementById('mergeSelectVideosBtn');
 
   filePathInput.title = 'ダブルクリックでファイル選択ダイアログを開く';
   outputDirInput.title = 'ダブルクリックでフォルダ選択ダイアログを開く';
@@ -364,6 +639,37 @@ function init() {
   document.getElementById('timelineAddBtn').addEventListener('click', handleAddClip);
   document.getElementById('timelineRemoveBtn').addEventListener('click', handleDeleteClip);
 
+  if (mergeLastExportsBtn) {
+    mergeLastExportsBtn.addEventListener('click', async () => {
+      await mergeVideoFiles(lastExportedFilePaths, {
+        button: mergeLastExportsBtn,
+        mergeMode: 'copy',
+        startMessage: `直前に出力した ${lastExportedFilePaths.length} 本を1本に結合しています...`
+      });
+    });
+  }
+
+  if (mergeSelectVideosBtn) {
+    mergeSelectVideosBtn.addEventListener('click', async () => {
+      try {
+        const selectedPaths = await openMultipleVideoFilesDialog();
+        if (!selectedPaths || selectedPaths.length === 0) {
+          addMessage('結合する動画の選択をキャンセルしました', 'info');
+          return;
+        }
+
+        addMessage(`${selectedPaths.length} 本の動画を選択しました`, 'success');
+        await mergeVideoFiles(selectedPaths, {
+          button: mergeSelectVideosBtn,
+          mergeMode: 'auto',
+          startMessage: `選択した ${selectedPaths.length} 本の動画を結合しています...`
+        });
+      } catch (error) {
+        addMessage(error.message, 'error');
+      }
+    });
+  }
+
   // キャンバス操作
   canvasElement.addEventListener('click', handleCanvasClick);
   canvasElement.addEventListener('wheel', handleWheel, { passive: false });
@@ -419,6 +725,7 @@ function init() {
 
   updateWorkspaceModeUI();
   updateReviewClipList();
+  refreshMergeSectionState();
 
   addMessage('Movie_AutoCut (Python Backend) へようこそ', 'info');
   addMessage('📂 動画ファイルのパスを入力して「読み込み」を押してください', 'info');
@@ -591,9 +898,13 @@ async function detectSpikesFromServer(filePath) {
 }
 
 function setTopActionButtonsDisabled(disabled) {
-  ['analyzeBtn', 'autoExportBtn'].forEach((buttonId) => {
+  ['analyzeBtn', 'autoExportBtn', 'mergeLastExportsBtn', 'mergeSelectVideosBtn'].forEach((buttonId) => {
     const button = document.getElementById(buttonId);
     if (button) {
+      if (disabled && isActiveExportStopButton(button)) {
+        button.disabled = false;
+        return;
+      }
       button.disabled = disabled;
     }
   });
@@ -664,6 +975,12 @@ async function handleAnalyze() {
 }
 
 async function handleAutoExport() {
+  const autoExportBtn = document.getElementById('autoExportBtn');
+  if (isActiveExportStopButton(autoExportBtn)) {
+    await requestExportStop();
+    return;
+  }
+
   if (isProcessing) {
     addMessage('別の書き出し処理が進行中です', 'warning');
     return;
@@ -674,13 +991,13 @@ async function handleAutoExport() {
     return;
   }
 
-  const autoExportBtn = document.getElementById('autoExportBtn');
   const progressContainer = document.getElementById('progressContainer');
   const originalText = autoExportBtn.innerHTML;
 
   setTopActionButtonsDisabled(true);
-  autoExportBtn.innerHTML = '自動出力中<span class="spinner"></span>';
+  autoExportBtn.innerHTML = '🎬 自動出力 | 検出中...';
   isProcessing = true;
+  refreshMergeSectionState();
   progressContainer.style.display = 'block';
   updateProgress('自動検出中...', 10);
 
@@ -704,90 +1021,30 @@ async function handleAutoExport() {
     updateProgress('書き出しを開始します...', 35);
 
     const exportIndexes = clips.map((_, index) => index);
-    await exportClipIndexes(exportIndexes, {
+    const exportResult = await exportClipIndexes(exportIndexes, {
       startMessage: `FFmpegで検出された${exportIndexes.length}個のクリップを自動出力しています...`,
       successMessage: `${exportIndexes.length}個の検出済みクリップを自動出力しました`,
       emptyMessage: '自動出力できるクリップがありません',
-      showProgress: true
+      showProgress: true,
+      button: autoExportBtn,
+      busyHtml: '🎬 自動出力 | 書き出し準備中'
     });
+
+    if (exportResult && exportResult.cancelled) {
+      updateProgress('書き出しを停止しました', 0);
+    }
   } finally {
+    resetExportButtonState();
     autoExportBtn.innerHTML = originalText;
     setTopActionButtonsDisabled(false);
     isProcessing = false;
+    refreshMergeSectionState();
 
     setTimeout(() => {
       progressContainer.style.display = 'none';
     }, 2000);
   }
 }
-
-
-// ===== クリップ書き出し（Python API + FFmpeg版） =====
-async function handleDownloadSegments() {
-  if (!clips || clips.length === 0 || !currentFilePath) {
-    addMessage('切り出すクリップがありません', 'error');
-    return;
-  }
-
-  const btn = document.getElementById('downloadSegmentsBtn');
-  const originalText = btn.innerHTML;
-  btn.innerHTML = '処理中<span class="spinner"></span>';
-  btn.disabled = true;
-  isProcessing = true;
-
-  const fps = parseInt(document.getElementById('fpsSelect').value) || 30;
-  const videoBitrate = parseInt(document.getElementById('bitrateInput').value) || 4500;
-  const audioBitrate = parseInt(document.getElementById('audioBitrateInput').value) || 128;
-  const outputDir = document.getElementById('outputDirInput').value.trim() || '';
-
-  addMessage(`🎬 FFmpegで${clips.length}個のクリップを書き出し中 (H.264, ${videoBitrate}kbps, ${fps}fps)...`, 'info');
-  document.getElementById('progressContainer').style.display = 'block';
-
-  try {
-    const params = new URLSearchParams({
-      file_path: currentFilePath,
-      clips_json: JSON.stringify(clips),
-      output_dir: outputDir,
-      fps: fps,
-      video_bitrate: videoBitrate,
-      audio_bitrate: audioBitrate
-    });
-
-    const { data, error, fallbackUsed } = await requestClipExport(params);
-
-    if (data.success) {
-      let successCount = 0;
-      for (const result of data.results) {
-        if (result.success) {
-          addMessage(`✅ クリップ${result.clip}: ${result.filename} (${result.size_mb} MB)`, 'success');
-          successCount++;
-        } else {
-          addMessage(`❌ クリップ${result.clip}: ${result.error}`, 'error');
-        }
-      }
-      addMessage(`📁 保存先: ${data.output_dir}`, 'info');
-      addMessage(`🎉 ${successCount}/${data.results.length}個のクリップを書き出しました`, 'success');
-
-      // フォルダを開くボタンを表示
-      if (data.output_dir) {
-        fetch(`${API_BASE}/api/open-folder?path=${encodeURIComponent(data.output_dir)}`);
-      }
-    } else {
-      addMessage(`書き出しエラー: ${error || data?.error || '書き出しに失敗しました'}`, 'error');
-    }
-  } catch (e) {
-    addMessage(`サーバー通信エラー: ${e.message}`, 'error');
-  } finally {
-    btn.innerHTML = originalText;
-    btn.disabled = false;
-    isProcessing = false;
-    setTimeout(() => {
-      document.getElementById('progressContainer').style.display = 'none';
-    }, 2000);
-  }
-}
-
-
 // ===== 動画圧縮（Python API + FFmpeg版） =====
 async function handleCompress() {
   if (isCompressing) {
@@ -1486,7 +1743,7 @@ async function requestClipExport(params) {
         data = {};
       }
 
-      if (resp.ok && data.success !== false) {
+      if (resp.ok && (data.success !== false || data.cancelled === true)) {
         return { data, fallbackUsed: i > 0 };
       }
 
@@ -2206,7 +2463,6 @@ async function exportClipIndexes(exportIndexes, options = {}) {
   }
 
   const fps = parseInt(document.getElementById('fpsSelect').value, 10) || 30;
-  const videoBitrate = parseInt(document.getElementById('bitrateInput').value, 10) || 4500;
   const audioBitrate = parseInt(document.getElementById('audioBitrateInput').value, 10) || 128;
   const outputDir = document.getElementById('outputDirInput').value.trim() || '';
   const requestFilePath = currentFilePath;
@@ -2229,14 +2485,19 @@ async function exportClipIndexes(exportIndexes, options = {}) {
   const button = options.button || null;
   const originalHtml = button ? button.innerHTML : '';
   const progressContainer = document.getElementById('progressContainer');
+  const requestVideoBitrate = getVideoBitrateSelection();
 
   if (button) {
-    button.innerHTML = options.busyHtml || '処理中<span class="spinner"></span>';
-    button.disabled = true;
+    button.innerHTML = options.busyHtml || '書き出し準備中';
+    button.disabled = false;
   }
 
   if (options.showProgress && progressContainer) {
     progressContainer.style.display = 'block';
+  }
+
+  if (button) {
+    beginExportButtonState(button, requestTargets.length, '書き出し準備中');
   }
 
   addMessage(options.startMessage || `FFmpegで${requestTargets.length}個のクリップを書き出し中...`, 'info');
@@ -2247,7 +2508,7 @@ async function exportClipIndexes(exportIndexes, options = {}) {
       clips_json: JSON.stringify(requestTargets.map((target) => target.clip)),
       output_dir: outputDir,
       fps: fps,
-      video_bitrate: videoBitrate,
+      video_bitrate: requestVideoBitrate,
       audio_bitrate: audioBitrate
     });
 
@@ -2290,11 +2551,18 @@ async function exportClipIndexes(exportIndexes, options = {}) {
       updateClipList();
     }
 
+    updateLastExportedFiles(data.results || []);
+
     if (data.output_dir) {
       addMessage(`📁 保存先: ${data.output_dir}`, 'info');
       if (options.openFolder !== false) {
         fetch(`${API_BASE}/api/open-folder?path=${encodeURIComponent(data.output_dir)}`).catch(() => {});
       }
+    }
+
+    if (data.cancelled) {
+      addMessage(`${successCount}/${requestTargets.length}個のクリップを書き出したところで停止しました`, 'warning');
+      return data;
     }
 
     addMessage(options.successMessage || `${successCount}/${requestTargets.length}個のクリップを書き出しました`, 'success');
@@ -2303,6 +2571,7 @@ async function exportClipIndexes(exportIndexes, options = {}) {
     addMessage(`サーバー通信エラー: ${e.message}`, 'error');
     return null;
   } finally {
+    resetExportButtonState();
     if (button) {
       button.innerHTML = originalHtml;
       button.disabled = false;
@@ -2317,6 +2586,11 @@ async function exportClipIndexes(exportIndexes, options = {}) {
 }
 
 async function exportSingleClip(index, buttonElement) {
+  if (isActiveExportStopButton(buttonElement)) {
+    await requestExportStop();
+    return;
+  }
+
   if (!clips[index]) return;
 
   if (processedClips.has(index)) {
@@ -2324,15 +2598,34 @@ async function exportSingleClip(index, buttonElement) {
     return;
   }
 
-  await exportClipIndexes([index], {
-    button: buttonElement,
-    busyHtml: '保存中',
-    startMessage: `クリップ ${index + 1} を単体出力中...`,
-    successMessage: `クリップ ${index + 1} の単体出力が完了しました`
-  });
+  if (isProcessing) {
+    addMessage('別の書き出し処理が進行中です', 'warning');
+    return;
+  }
+
+  isProcessing = true;
+  refreshMergeSectionState();
+
+  try {
+    await exportClipIndexes([index], {
+      button: buttonElement,
+      busyHtml: '保存準備中',
+      startMessage: `クリップ ${index + 1} を単体出力中...`,
+      successMessage: `クリップ ${index + 1} の単体出力が完了しました`
+    });
+  } finally {
+    isProcessing = false;
+    refreshMergeSectionState();
+  }
 }
 
 async function handleDownloadSegments() {
+  const btn = document.getElementById('downloadSegmentsBtn');
+  if (isActiveExportStopButton(btn)) {
+    await requestExportStop();
+    return;
+  }
+
   if (isProcessing) {
     addMessage('別の書き出し処理が進行中です', 'warning');
     return;
@@ -2349,19 +2642,20 @@ async function handleDownloadSegments() {
     return;
   }
 
-  const btn = document.getElementById('downloadSegmentsBtn');
   isProcessing = true;
+  refreshMergeSectionState();
 
   try {
     await exportClipIndexes(exportIndexes, {
       button: btn,
-      busyHtml: '書き出し中<span class="spinner"></span>',
+      busyHtml: '書き出し準備中',
       startMessage: `FFmpegで${exportIndexes.length}個のチェック済みクリップを書き出し中...`,
       successMessage: `${exportIndexes.length}個のチェック済みクリップを書き出しました`,
       showProgress: true
     });
   } finally {
     isProcessing = false;
+    refreshMergeSectionState();
   }
 }
 

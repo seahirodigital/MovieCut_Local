@@ -1384,7 +1384,7 @@
         <label style="margin-bottom:4px;color:#d1d5db;font-size:0.9rem;">⚙️ 自動処理</label>
         <div class="top-action-row">
           <button id="analyzeBtn" class="btn btn-process top-action-btn" type="button">🔍 自動検出</button>
-          <button id="autoExportBtn" class="btn btn-secondary top-action-btn" type="button">🎬 自動出力</button>
+          <button id="autoExportBtn" class="btn btn-primary top-action-btn" type="button">🎬 自動出力</button>
         </div>
       </div>
     </div>
@@ -1468,7 +1468,7 @@
         / Space・]・\=再生/停止 / ←→=5秒移動 / P=追加 / Backspace・Delete=削除 / reviewビューでは Enter=OK・次カード / Shift+ホイール=ズーム</p>
 
       <div style="margin-top:15px;display:flex;gap:15px;align-items:center;flex-wrap:wrap">
-        <button id="downloadSegmentsBtn" class="btn btn-secondary" style="display:none;margin:0">💾 編集した動画を作成</button>
+        <button id="downloadSegmentsBtn" class="btn btn-primary" style="display:none;margin:0">💾 編集した動画を作成</button>
 
         <div style="display:flex;align-items:center;gap:10px">
           <label style="margin:0;white-space:nowrap">FPS:</label>
@@ -1487,6 +1487,7 @@
             <option value="2000">2000kbps (軽量)</option>
             <option value="2500" selected>2500kbps (高画質・推奨)</option>
             <option value="4500">4500kbps (超高画質)</option>
+            <option value="copy">圧縮しない (再エンコードなしで切り出し)</option>
           </select>
         </div>
 
@@ -1501,6 +1502,16 @@
         </div>
       </div>
     </section>
+
+  <section class="card">
+    <h3 class="section-title">🔗 動画結合</h3>
+    <p class="help-text" style="margin-bottom:15px">💡 上の「保存先フォルダ」をそのまま使って、細切れ出力後の動画や複数動画を1本に結合できます。</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <button id="mergeLastExportsBtn" class="btn btn-primary" type="button">🧩 直前に出力した動画を1本に結合</button>
+      <button id="mergeSelectVideosBtn" class="btn btn-secondary" type="button">📂 複数動画を選んで結合</button>
+    </div>
+    <div id="mergeStatus" class="help-text" style="margin-top:12px">まだ細切れ出力結果がありません</div>
+  </section>
 
   <section class="card">
     <h3 class="section-title">📋 処理ログ</h3>
