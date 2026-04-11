@@ -18,6 +18,10 @@ import server
 
 SOURCE_ROOT = Path("/Users/user/Downloads/JINRI_mac/0.元データ/自動分割")
 OUTPUT_ROOT = Path("/Users/user/Downloads/JINRI_mac/1.カット後/分割カット後")
+SPLIT_DETECT_SETTINGS = {
+    **autocut.DEFAULT_DETECT_SETTINGS,
+    "clip_duration": 34.0,
+}
 
 
 def build_split_output_dir(source_path: Path) -> Path:
@@ -61,6 +65,19 @@ def delete_source_video(source_path: Path) -> bool:
 
     resolved_source.unlink()
     return True
+
+
+async def detect_split_clips(file_path: Path) -> list[dict]:
+    response = await server.detect_spikes(
+        file_path=str(file_path),
+        **SPLIT_DETECT_SETTINGS,
+    )
+    data = autocut.response_to_dict(response)
+
+    if getattr(response, "status_code", 200) >= 400 or data.get("success") is False:
+        raise RuntimeError(data.get("error") or "自動検出に失敗しました")
+
+    return data.get("clips", [])
 
 
 async def export_split_clip(
@@ -119,7 +136,7 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
     print(f"  分割保存先: {output_dir}")
 
     try:
-        clips = await autocut.detect_clips(file_path)
+        clips = await detect_split_clips(file_path)
         print(f"  検出クリップ数: {len(clips)}")
 
         if not clips:
@@ -199,7 +216,7 @@ async def main() -> int:
     print(f"入力元: {SOURCE_ROOT}")
     print(f"出力先: {OUTPUT_ROOT}")
     print("-" * 72)
-    print(f"自動検出設定: {autocut.DEFAULT_DETECT_SETTINGS}")
+    print(f"自動検出設定: {SPLIT_DETECT_SETTINGS}")
     print(f"書き出し設定: {autocut.DEFAULT_EXPORT_SETTINGS}")
     print("-" * 72)
 
