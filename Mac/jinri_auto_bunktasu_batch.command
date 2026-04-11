@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================
-# JINRI mac 一括自動不要部カット
+# JINRI mac 一括自動分割カット
 # =============================================
-# Mac/jinri_autocut_batch.py を macOS 環境で実行する。
+# Mac/jinri_auto_bunktasu_batch.py を macOS 環境で実行する。
 # 仮想環境は OneDrive 同期対象外のローカル領域に作成する。
 # =============================================
 
@@ -15,7 +15,7 @@ PROJECT_DIR="$(cd "${MAC_DIR}/.." && pwd)"
 LOCAL_STATE_DIR="/Users/user/Library/Application Support/Movie_AutoCut"
 
 echo "========================================"
-echo "  JINRI mac 一括自動不要部カット"
+echo "  JINRI mac 一括自動分割カット"
 echo "========================================"
 echo
 
@@ -56,21 +56,21 @@ echo "[*] 依存関係をインストールします..."
 "$VENV_PYTHON" -m pip install --disable-pip-version-check -r "${PROJECT_DIR}/requirements.txt"
 
 echo
-echo "[注意] 最終動画の保存に成功した元動画は削除されます。"
+echo "[注意] すべての分割クリップ保存に成功した元動画は削除されます。"
 echo
-echo "[*] JINRI mac 一括自動不要部カットを開始します..."
+echo "[*] JINRI mac 一括自動分割カットを開始します..."
 echo
 
 set +e
-"$VENV_PYTHON" "${MAC_DIR}/jinri_autocut_batch.py"
+"$VENV_PYTHON" "${MAC_DIR}/jinri_auto_bunktasu_batch.py"
 BATCH_EXIT_CODE=$?
 set -e
 
 echo
 if [ "$BATCH_EXIT_CODE" -eq 0 ]; then
-  echo "[OK] JINRI mac 一括自動不要部カットは正常終了しました。"
+  echo "[OK] JINRI mac 一括自動分割カットは正常終了しました。"
 else
-  echo "[ERROR] JINRI mac 一括自動不要部カットが失敗しました。終了コード: ${BATCH_EXIT_CODE}"
+  echo "[ERROR] JINRI mac 一括自動分割カットが失敗しました。終了コード: ${BATCH_EXIT_CODE}"
 fi
 
 if [ -t 0 ]; then

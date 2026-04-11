@@ -15,7 +15,7 @@ if str(PROJECT_DIR) not in sys.path:
 import server
 
 
-SOURCE_ROOT = Path("/Users/user/Downloads/JINRI_mac/0.元データ/自動不要部カット")
+SOURCE_ROOT = Path("/Users/user/Downloads/JINRI_mac/0.元データ/自動不要部カットで１本化")
 OUTPUT_ROOT = Path("/Users/user/Downloads/JINRI_mac/1.カット後")
 WORK_DIR_PREFIX = ".jinri_autocut_work_"
 
