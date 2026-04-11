@@ -3,7 +3,7 @@
 # Movie AutoCut - macOS 専用ランチャー
 # =============================================
 # Mac/server_mac.py を起動し、ブラウザを自動で開く。
-# 仮想環境は親ディレクトリ (プロジェクトルート) に作成・再利用する。
+# 仮想環境は OneDrive 同期対象外のローカル領域に作成・再利用する。
 # ダイアログは osascript (AppleScript) を使用するため、
 # tkinter の macOS 固有の問題を回避できる。
 # =============================================
@@ -16,6 +16,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 MAC_DIR="$(cd "$(dirname "$0")" && pwd)"
 # 親ディレクトリ（プロジェクトルート: server.py, requirements.txt 等がある場所）
 PROJECT_DIR="$(cd "${MAC_DIR}/.." && pwd)"
+LOCAL_STATE_DIR="/Users/user/Library/Application Support/Movie_AutoCut"
 
 START_URL="${START_URL:-http://127.0.0.1:8765/}"
 SERVER_PID=""
@@ -66,7 +67,9 @@ fi
 
 BOOTSTRAP_VERSION="$("$BOOTSTRAP_PYTHON" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")')"
 VENV_SUFFIX="$("$BOOTSTRAP_PYTHON" -c 'import sys; print(f"{sys.version_info[0]}{sys.version_info[1]}")')"
-VENV_DIR="${PROJECT_DIR}/venv-macos-py${VENV_SUFFIX}"
+VENV_DIR="${LOCAL_STATE_DIR}/venv-macos-py${VENV_SUFFIX}"
+
+mkdir -p "${LOCAL_STATE_DIR}"
 
 echo "========================================"
 echo "  Movie AutoCut - macOS Launcher"
@@ -91,7 +94,7 @@ fi
 
 # ===== 依存関係インストール =====
 echo "[*] 依存関係をインストールします..."
-if ! "$VENV_PYTHON" -m pip install -r "${PROJECT_DIR}/requirements.txt" -q; then
+if ! "$VENV_PYTHON" -m pip install --disable-pip-version-check -r "${PROJECT_DIR}/requirements.txt"; then
   die "依存関係のインストールに失敗しました。上のログを確認してください。"
 fi
 

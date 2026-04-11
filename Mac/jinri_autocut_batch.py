@@ -108,6 +108,19 @@ def build_final_output_path(source_path: Path, final_output_dir: Path) -> Path:
     return ensure_unique_path(final_output_dir / f"{source_path.stem}{suffix}")
 
 
+def delete_source_video(source_path: Path) -> bool:
+    resolved_source = source_path.resolve()
+    resolved_root = SOURCE_ROOT.resolve()
+
+    if resolved_root not in resolved_source.parents:
+        raise RuntimeError(f"削除対象が入力元フォルダ配下ではありません: {resolved_source}")
+    if not resolved_source.is_file():
+        raise RuntimeError(f"削除対象ファイルが見つかりません: {resolved_source}")
+
+    resolved_source.unlink()
+    return True
+
+
 async def detect_clips(file_path: Path) -> list[dict]:
     response = await server.detect_spikes(
         file_path=str(file_path),
@@ -233,6 +246,7 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
                 "exported": 0,
                 "merged": False,
                 "errors": 0,
+                "source_deleted": False,
             }
 
         exported_paths: list[Path] = []
@@ -258,6 +272,7 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
                 "exported": 0,
                 "merged": False,
                 "errors": max(1, error_count),
+                "source_deleted": False,
             }
 
         if len(exported_paths) < len(clips):
@@ -268,6 +283,9 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
 
         final_output_path = await merge_exported_clips(file_path, exported_paths, final_output_dir)
         print(f"  保存完了: {final_output_path}")
+        deleted_source = delete_source_video(file_path)
+        if deleted_source:
+            print(f"  元動画を削除しました: {file_path}")
 
         return {
             "file_name": str(relative_path),
@@ -276,6 +294,7 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
             "merged": True,
             "errors": error_count,
             "output_path": str(final_output_path),
+            "source_deleted": deleted_source,
         }
     except Exception as error:
         print(f"  処理エラー: {error}")
@@ -285,6 +304,7 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
             "exported": 0,
             "merged": False,
             "errors": 1,
+            "source_deleted": False,
         }
     finally:
         server.analysis_state_by_file.pop(str(file_path), None)
@@ -321,6 +341,7 @@ async def main() -> int:
     total_exported = sum(item["exported"] for item in summaries)
     total_merged = sum(1 for item in summaries if item["merged"])
     total_errors = sum(item["errors"] for item in summaries)
+    total_deleted = sum(1 for item in summaries if item.get("source_deleted"))
 
     print("=" * 72)
     print("一括処理が完了しました。")
@@ -328,6 +349,7 @@ async def main() -> int:
     print(f"検出クリップ総数: {total_detected}")
     print(f"書き出し成功総数: {total_exported}")
     print(f"最終動画作成数: {total_merged}")
+    print(f"元動画削除数: {total_deleted}")
     print(f"エラー総数: {total_errors}")
     print(f"保存先: {OUTPUT_ROOT}")
 
