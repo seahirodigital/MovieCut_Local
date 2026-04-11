@@ -20,9 +20,13 @@ import sys
 import asyncio
 import json
 import mimetypes
+import shutil
+import time
 from pathlib import Path
 from urllib.parse import parse_qs
 
+from fastapi import Form
+from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 # ===== 親ディレクトリをインポートパスに追加 =====
@@ -260,8 +264,11 @@ _DIALOG_DISPATCH = {
     "/api/dialog/open-directory": _handle_open_directory,
 }
 
+APP_JS_PATH = PARENT_DIR / "app.js"
+APP_MAC_PATCH_PATH = Path(__file__).with_name("app_mac_patch.js")
 REVIEW_JS_PATH = PARENT_DIR / "review.js"
 REVIEW_MAC_PATCH_PATH = Path(__file__).with_name("review_mac_patch.js")
+MAC_EXPORT_MERGE_WORKDIR_PREFIX = ".movie_autocut_export_merge_"
 
 
 async def _serve_dialog(handler, scope: Scope, receive: Receive, send: Send) -> None:
@@ -269,8 +276,15 @@ async def _serve_dialog(handler, scope: Scope, receive: Receive, send: Send) -> 
     await response(scope, receive, send)
 
 
-async def _serve_review_js(scope: Scope, receive: Receive, send: Send) -> None:
-    """親の review.js に Mac 用パッチを追記して返す"""
+async def _serve_patched_javascript(
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    original_path: Path,
+    patch_path: Path,
+    label: str,
+) -> None:
+    """親の JavaScript に Mac 用パッチを追記して返す"""
     method = scope.get("method", "GET").upper()
     if method not in {"GET", "HEAD"}:
         response = _text_response(
@@ -283,9 +297,9 @@ async def _serve_review_js(scope: Scope, receive: Receive, send: Send) -> None:
         return
 
     try:
-        original_source = _read_utf8_text(REVIEW_JS_PATH)
-        patch_source = _read_utf8_text(REVIEW_MAC_PATCH_PATH)
-        combined_source = f"{original_source}\n\n/* Mac 専用パッチ */\n{patch_source}\n"
+        original_source = _read_utf8_text(original_path)
+        patch_source = _read_utf8_text(patch_path)
+        combined_source = f"{original_source}\n\n/* Mac 専用パッチ: {patch_path.name} */\n{patch_source}\n"
         headers = {"Content-Length": str(len(combined_source.encode('utf-8')))}
         if method == "HEAD":
             response = StarletteResponse(
@@ -301,9 +315,31 @@ async def _serve_review_js(scope: Scope, receive: Receive, send: Send) -> None:
                 headers=headers,
             )
     except Exception as e:
-        response = _json_response({"error": f"review.js の読み込みに失敗しました: {e}"}, 500)
+        response = _json_response({"error": f"{label} の読み込みに失敗しました: {e}"}, 500)
 
     await response(scope, receive, send)
+
+
+async def _serve_app_js(scope: Scope, receive: Receive, send: Send) -> None:
+    await _serve_patched_javascript(
+        scope,
+        receive,
+        send,
+        original_path=APP_JS_PATH,
+        patch_path=APP_MAC_PATCH_PATH,
+        label="app.js",
+    )
+
+
+async def _serve_review_js(scope: Scope, receive: Receive, send: Send) -> None:
+    await _serve_patched_javascript(
+        scope,
+        receive,
+        send,
+        original_path=REVIEW_JS_PATH,
+        patch_path=REVIEW_MAC_PATCH_PATH,
+        label="review.js",
+    )
 
 
 async def _serve_video(scope: Scope, receive: Receive, send: Send) -> None:
@@ -414,6 +450,103 @@ async def _serve_video(scope: Scope, receive: Receive, send: Send) -> None:
         decrement_active_video_stream(file_path)
 
 
+def _resolve_mac_export_merge_base_dir(base_dir: str, source_file_path: str) -> Path:
+    candidate_base = Path(str(base_dir or "").strip()).expanduser()
+    if str(candidate_base).strip() and candidate_base.is_dir():
+        return candidate_base.resolve()
+
+    source_path = Path(str(source_file_path or "").strip()).expanduser()
+    if str(source_path).strip() and source_path.is_file():
+        return source_path.resolve().parent
+
+    raise ValueError("保存先フォルダを特定できませんでした")
+
+
+def _is_mac_export_merge_workdir(path: Path) -> bool:
+    return path.is_dir() and path.name.startswith(MAC_EXPORT_MERGE_WORKDIR_PREFIX)
+
+
+@app.post("/api/mac/create-export-merge-workdir")
+async def create_mac_export_merge_workdir(
+    base_dir: str = Form(""),
+    source_file_path: str = Form(""),
+):
+    try:
+        resolved_base_dir = _resolve_mac_export_merge_base_dir(base_dir, source_file_path)
+    except ValueError as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=400)
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    work_dir = resolved_base_dir / f"{MAC_EXPORT_MERGE_WORKDIR_PREFIX}{timestamp}_{int(time.time() * 1000) % 1000:03d}"
+    work_dir.mkdir(parents=False, exist_ok=False)
+
+    return JSONResponse({
+        "success": True,
+        "path": str(work_dir),
+        "base_dir": str(resolved_base_dir),
+    })
+
+
+@app.post("/api/mac/remove-export-merge-workdir")
+async def remove_mac_export_merge_workdir(
+    work_dir: str = Form(...),
+    base_dir: str = Form(""),
+):
+    work_path = Path(str(work_dir or "").strip()).expanduser()
+    if not str(work_path).strip():
+        return JSONResponse({"success": False, "error": "作業フォルダの指定がありません"}, status_code=400)
+    if not work_path.exists():
+        return JSONResponse({"success": True, "removed": False, "path": str(work_path)})
+    if not _is_mac_export_merge_workdir(work_path):
+        return JSONResponse({"success": False, "error": f"削除対象が Mac 一時作業フォルダではありません: {work_path}"}, status_code=400)
+
+    resolved_work_path = work_path.resolve()
+    if base_dir:
+        try:
+            resolved_base_dir = Path(base_dir).expanduser().resolve()
+        except OSError:
+            return JSONResponse({"success": False, "error": f"保存先フォルダの解決に失敗しました: {base_dir}"}, status_code=400)
+        if resolved_work_path.parent != resolved_base_dir:
+            return JSONResponse({"success": False, "error": "作業フォルダの親ディレクトリが保存先と一致しません"}, status_code=400)
+
+    shutil.rmtree(resolved_work_path)
+    return JSONResponse({"success": True, "removed": True, "path": str(resolved_work_path)})
+
+
+@app.post("/api/mac/promote-export-merge-output")
+async def promote_mac_export_merge_output(
+    source_path: str = Form(...),
+    base_dir: str = Form(...),
+):
+    source_file = Path(str(source_path or "").strip()).expanduser()
+    target_base_dir = Path(str(base_dir or "").strip()).expanduser()
+
+    if not str(source_file).strip():
+        return JSONResponse({"success": False, "error": "移動元ファイルの指定がありません"}, status_code=400)
+    if not str(target_base_dir).strip():
+        return JSONResponse({"success": False, "error": "保存先フォルダの指定がありません"}, status_code=400)
+    if not source_file.is_file():
+        return JSONResponse({"success": False, "error": f"移動元ファイルが見つかりません: {source_file}"}, status_code=400)
+    if not target_base_dir.is_dir():
+        return JSONResponse({"success": False, "error": f"保存先フォルダが見つかりません: {target_base_dir}"}, status_code=400)
+    if not _is_mac_export_merge_workdir(source_file.parent):
+        return JSONResponse({"success": False, "error": "移動元が Mac 一時作業フォルダではありません"}, status_code=400)
+
+    resolved_source = source_file.resolve()
+    resolved_base_dir = target_base_dir.resolve()
+    destination_path = resolved_base_dir / resolved_source.name
+
+    if destination_path.exists():
+        return JSONResponse({"success": False, "error": f"同名ファイルがすでに存在します: {destination_path}"}, status_code=409)
+
+    moved_path = Path(shutil.move(str(resolved_source), str(destination_path)))
+    return JSONResponse({
+        "success": True,
+        "source_path": str(resolved_source),
+        "output_path": str(moved_path.resolve()),
+    })
+
+
 # =====================================================================
 #  Raw ASGI ミドルウェア
 # =====================================================================
@@ -434,6 +567,9 @@ class MacDialogMiddleware:
             path = scope.get("path", "")
             if path == "/api/video":
                 await _serve_video(scope, receive, send)
+                return
+            if path == "/app.js":
+                await _serve_app_js(scope, receive, send)
                 return
             if path == "/review.js":
                 await _serve_review_js(scope, receive, send)
