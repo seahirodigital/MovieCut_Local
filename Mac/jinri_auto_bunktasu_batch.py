@@ -22,9 +22,32 @@ OUTPUT_ROOT = Path("/Users/user/Downloads/JINRI_mac/1.カット後/分割カッ�
 
 def build_split_output_dir(source_path: Path) -> Path:
     relative_path = source_path.relative_to(SOURCE_ROOT)
-    output_dir = OUTPUT_ROOT / relative_path.parent / source_path.stem
+    output_dir = OUTPUT_ROOT / relative_path.parent / build_output_file_stem(source_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def build_output_file_stem(source_path: Path) -> str:
+    stem = source_path.stem
+    if "_@" in stem:
+        return stem.split("_@", 1)[0]
+    return stem
+
+
+def format_duration_label(seconds: float) -> str:
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, second = divmod(remainder, 60)
+    total_minutes = hours * 60 + minutes
+    return f"{total_minutes:02d}{second:02d}"
+
+
+def build_split_output_path(output_dir: Path, source_path: Path, clip: dict) -> Path:
+    start_label = format_duration_label(float(clip["start"]))
+    end_label = format_duration_label(float(clip["end"]))
+    suffix = source_path.suffix if autocut.EXPORT_MODE == "copy" and source_path.suffix else ".mp4"
+    base_name = f"{build_output_file_stem(source_path)}_{start_label}-{end_label}{suffix}"
+    return autocut.ensure_unique_path(output_dir / base_name)
 
 
 def delete_source_video(source_path: Path) -> bool:
@@ -38,6 +61,53 @@ def delete_source_video(source_path: Path) -> bool:
 
     resolved_source.unlink()
     return True
+
+
+async def export_split_clip(
+    file_path: Path,
+    clip: dict,
+    clip_index: int,
+    clip_total: int,
+    output_dir: Path,
+) -> dict:
+    output_path = build_split_output_path(output_dir, file_path, clip)
+    start = float(clip["start"])
+    end = float(clip["end"])
+    duration_sec = max(0.01, end - start)
+
+    print(
+        f"    [{clip_index}/{clip_total}] 書き出し中: "
+        f"{server.format_time(start)} -> {server.format_time(end)}"
+    )
+
+    cmd = server.build_export_command(
+        file_path=str(file_path),
+        start=start,
+        duration_sec=duration_sec,
+        output_path=str(output_path),
+        fps=autocut.DEFAULT_EXPORT_SETTINGS["fps"],
+        video_bitrate=autocut.NORMALIZED_VIDEO_BITRATE,
+        audio_bitrate=autocut.DEFAULT_EXPORT_SETTINGS["audio_bitrate"],
+        export_mode=autocut.EXPORT_MODE,
+    )
+
+    returncode, _, stderr = await server.run_process_capture(cmd)
+
+    if returncode != 0:
+        error_text = stderr.decode("utf-8", errors="replace").strip()
+        return {
+            "success": False,
+            "clip_index": clip_index,
+            "error": error_text[:400],
+        }
+
+    file_size_mb = round(output_path.stat().st_size / (1024 * 1024), 2)
+    return {
+        "success": True,
+        "clip_index": clip_index,
+        "output_path": output_path,
+        "file_size_mb": file_size_mb,
+    }
 
 
 async def process_video(file_path: Path, video_index: int, video_total: int) -> dict:
@@ -66,7 +136,7 @@ async def process_video(file_path: Path, video_index: int, video_total: int) -> 
         error_count = 0
 
         for clip_index, clip in enumerate(clips, start=1):
-            result = await autocut.export_clip(file_path, clip, clip_index, len(clips), output_dir)
+            result = await export_split_clip(file_path, clip, clip_index, len(clips), output_dir)
             if result["success"]:
                 exported_paths.append(result["output_path"])
                 print(
