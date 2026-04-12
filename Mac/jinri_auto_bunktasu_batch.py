@@ -26,7 +26,7 @@ SPLIT_DETECT_SETTINGS = {
 
 def build_split_output_dir(source_path: Path) -> Path:
     relative_path = source_path.relative_to(SOURCE_ROOT)
-    output_dir = OUTPUT_ROOT / relative_path.parent / build_output_file_stem(source_path)
+    output_dir = OUTPUT_ROOT / relative_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
