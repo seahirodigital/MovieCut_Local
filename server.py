@@ -144,6 +144,13 @@ def get_default_review_ok_dir() -> Path:
     )
 
 
+def get_default_jinri_root() -> Path:
+    return get_env_path(
+        "MOVIE_AUTOCUT_JINRI_ROOT",
+        Path.home() / "Downloads" / "JINRI_mac",
+    )
+
+
 REVIEW_REJECT_DIR = get_default_review_reject_dir()
 REVIEW_OK_DIR = get_default_review_ok_dir()
 REVIEW_MOVE_FAILURE_LOG = TEMP_DIR / "review_move_failures.log"
@@ -237,6 +244,54 @@ def normalize_managed_path(file_path: str | Path) -> str:
 
 def normalize_dialog_selection(selected_path: str) -> str:
     return os.path.normpath(selected_path)
+
+
+def get_dropped_file_search_roots() -> list[Path]:
+    roots = [
+        get_default_auto_export_source_dir(),
+        get_default_auto_export_output_dir(),
+        REVIEW_OK_DIR,
+        REVIEW_REJECT_DIR,
+        get_default_jinri_root(),
+        Path.home() / "Downloads",
+    ]
+    unique_roots = []
+    seen = set()
+    for root in roots:
+        try:
+            resolved = root.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        unique_roots.append(resolved)
+    return unique_roots
+
+
+def find_dropped_file_matches(file_name: str, file_size: int | None = None) -> list[str]:
+    safe_name = Path(str(file_name or "")).name
+    if not safe_name:
+        return []
+
+    matches = []
+    for root in get_dropped_file_search_roots():
+        try:
+            candidates = root.rglob(safe_name)
+        except Exception:
+            continue
+
+        for candidate in candidates:
+            try:
+                if not candidate.is_file():
+                    continue
+                if file_size is not None and file_size >= 0 and candidate.stat().st_size != file_size:
+                    continue
+                matches.append(str(candidate.resolve()))
+            except Exception:
+                continue
+
+    return sorted(set(matches))
 
 
 def prepare_dialog_root(root) -> None:
@@ -1405,6 +1460,51 @@ async def get_app_config():
         "review_reject_dir": str(REVIEW_REJECT_DIR),
         "auto_export_source_dir": str(get_default_auto_export_source_dir()),
         "auto_export_output_dir": str(get_default_auto_export_output_dir()),
+    })
+
+
+@app.post("/api/resolve-dropped-files")
+async def resolve_dropped_files(file_metadata_json: str = Form(...)):
+    try:
+        file_metadata = json.loads(file_metadata_json)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "ドロップファイル情報の形式が不正です"}, status_code=400)
+
+    if not isinstance(file_metadata, list):
+        return JSONResponse({"error": "ドロップファイル情報は配列で指定してください"}, status_code=400)
+
+    resolved_paths = []
+    unresolved = []
+    ambiguous = []
+
+    for item in file_metadata[:1000]:
+        if not isinstance(item, dict):
+            continue
+
+        file_name = Path(str(item.get("name") or "")).name
+        if not file_name:
+            continue
+
+        raw_size = item.get("size")
+        try:
+            file_size = int(raw_size) if raw_size is not None else None
+        except (TypeError, ValueError):
+            file_size = None
+
+        matches = find_dropped_file_matches(file_name, file_size)
+        if len(matches) == 1:
+            resolved_paths.append(matches[0])
+        elif len(matches) > 1:
+            ambiguous.append({"name": file_name, "matches": matches[:10]})
+        else:
+            unresolved.append(file_name)
+
+    return JSONResponse({
+        "success": True,
+        "paths": resolved_paths,
+        "unresolved": unresolved,
+        "ambiguous": ambiguous,
+        "search_roots": [str(path) for path in get_dropped_file_search_roots()],
     })
 
 

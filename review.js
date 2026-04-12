@@ -72,7 +72,7 @@ function applyReviewPlatformCopy() {
 
   const filePathsInput = document.getElementById('reviewFilePathsInput');
   if (filePathsInput) {
-    filePathsInput.placeholder = 'ダブルクリックでファイル選択ダイアログを開く / 手入力する場合は改行区切りで入力';
+    filePathsInput.placeholder = '動画ファイルをまとめてドロップ / ダブルクリックで選択 / 手入力は改行区切り';
   }
 
   const sideNote = document.querySelector('.side-panel-note');
@@ -170,6 +170,189 @@ function parseFilePaths(rawText) {
       seen.add(line);
       return true;
     });
+}
+
+function isSupportedVideoPath(path) {
+  return /\.(mp4|mov|avi|mkv|wmv|flv|webm|m4v|ts|mts)$/i.test(String(path || '').trim());
+}
+
+function isAbsoluteDroppedPath(path) {
+  return String(path || '').startsWith('/') || /^[A-Za-z]:[\\/]/.test(String(path || ''));
+}
+
+function decodeDroppedPath(path) {
+  try {
+    return decodeURIComponent(path);
+  } catch (error) {
+    return path;
+  }
+}
+
+function normalizeDroppedPath(value) {
+  let path = String(value || '').trim();
+  if (!path || path.startsWith('#')) {
+    return '';
+  }
+
+  if (path.startsWith('file://')) {
+    try {
+      const url = new URL(path);
+      path = url.pathname;
+    } catch (error) {
+      path = path.replace(/^file:\/\/localhost/i, '').replace(/^file:\/\//i, '');
+    }
+  }
+
+  return decodeDroppedPath(path).trim();
+}
+
+function addDroppedPathCandidates(paths, text) {
+  String(text || '')
+    .split(/\r?\n/)
+    .map((line) => normalizeDroppedPath(line))
+    .filter((path) => path && isAbsoluteDroppedPath(path) && isSupportedVideoPath(path))
+    .forEach((path) => paths.push(path));
+}
+
+function readDroppedString(item) {
+  return new Promise((resolve) => {
+    item.getAsString((value) => resolve(value || ''));
+  });
+}
+
+function getDroppedVideoFileMetadata(dataTransfer) {
+  if (!dataTransfer || !dataTransfer.files) {
+    return [];
+  }
+
+  return Array.from(dataTransfer.files)
+    .filter((file) => file && isSupportedVideoPath(file.name))
+    .map((file) => ({
+      name: file.name,
+      size: file.size,
+      lastModified: file.lastModified || null
+    }));
+}
+
+async function resolveDroppedVideoPathsByMetadata(dataTransfer) {
+  const fileMetadata = getDroppedVideoFileMetadata(dataTransfer);
+  if (fileMetadata.length === 0) {
+    return [];
+  }
+
+  const formData = new FormData();
+  formData.append('file_metadata_json', JSON.stringify(fileMetadata));
+
+  const response = await fetch(`${API_BASE}/api/resolve-dropped-files`, {
+    method: 'POST',
+    body: formData
+  });
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || 'ドロップした動画ファイルのパス解決に失敗しました');
+  }
+
+  if (Array.isArray(data.ambiguous) && data.ambiguous.length > 0) {
+    addMessage(`${data.ambiguous.length}件は同名ファイルが複数あり、自動判定できませんでした`, 'warning');
+  }
+  if (Array.isArray(data.unresolved) && data.unresolved.length > 0) {
+    addMessage(`${data.unresolved.length}件は既知フォルダ内で見つかりませんでした`, 'warning');
+  }
+
+  return Array.isArray(data.paths) ? data.paths : [];
+}
+
+async function getDroppedVideoPaths(dataTransfer) {
+  const paths = [];
+
+  if (!dataTransfer) {
+    return paths;
+  }
+
+  ['text/uri-list', 'text/plain'].forEach((type) => {
+    addDroppedPathCandidates(paths, dataTransfer.getData(type));
+  });
+
+  if (dataTransfer.items) {
+    const stringItems = Array.from(dataTransfer.items).filter((item) => item.kind === 'string');
+    for (const item of stringItems) {
+      addDroppedPathCandidates(paths, await readDroppedString(item));
+    }
+  }
+
+  if (dataTransfer.files) {
+    Array.from(dataTransfer.files).forEach((file) => {
+      addDroppedPathCandidates(paths, file.path || '');
+    });
+  }
+
+  const directPaths = Array.from(new Set(paths));
+  if (directPaths.length > 0) {
+    return directPaths;
+  }
+
+  return resolveDroppedVideoPathsByMetadata(dataTransfer);
+}
+
+function setDropTargetActive(target, active) {
+  if (!target) return;
+
+  target.style.outline = active ? '2px solid #38bdf8' : '';
+  target.style.outlineOffset = active ? '3px' : '';
+  target.style.backgroundColor = active ? 'rgba(56,189,248,0.08)' : '';
+}
+
+async function handleReviewFilePathsDrop(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  setDropTargetActive(event.currentTarget, false);
+
+  let paths = [];
+  try {
+    paths = await getDroppedVideoPaths(event.dataTransfer);
+  } catch (error) {
+    addMessage(error.message || 'ドロップした動画ファイルのパス解決に失敗しました', 'error');
+    return;
+  }
+
+  if (paths.length === 0) {
+    addMessage('動画パスを取得できませんでした。Finderからパス文字列または file:// 形式でドロップしてください。', 'warning');
+    return;
+  }
+
+  const textarea = document.getElementById('reviewFilePathsInput');
+  if (textarea) {
+    textarea.value = paths.join('\n');
+  }
+
+  addMessage(`${paths.length} 本の動画をドロップで受け取りました。自動で読み込みます`, 'success');
+  await loadReviewFiles(paths);
+}
+
+function setupReviewVideoDropTarget(target) {
+  if (!target) return;
+
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    target.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy';
+      }
+      setDropTargetActive(target, true);
+    });
+  });
+
+  ['dragleave', 'dragend'].forEach((eventName) => {
+    target.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropTargetActive(target, false);
+    });
+  });
+
+  target.addEventListener('drop', handleReviewFilePathsDrop, { capture: true });
 }
 
 function refreshPathsTextarea() {
@@ -1479,6 +1662,9 @@ function init() {
   const reviewUndoBtn = document.getElementById('reviewUndoBtn');
   const reviewNextBtn = document.getElementById('reviewNextBtn');
   const reviewFilePathsInput = document.getElementById('reviewFilePathsInput');
+  const reviewFilePathsDropTarget = reviewFilePathsInput
+    ? reviewFilePathsInput.closest('.top-control-card') || reviewFilePathsInput
+    : null;
 
   if (navMenuBtn) navMenuBtn.addEventListener('click', () => toggleSidePanel());
   if (sidePanelOverlay) sidePanelOverlay.addEventListener('click', () => toggleSidePanel(false));
@@ -1512,6 +1698,7 @@ function init() {
   if (reviewNextBtn) reviewNextBtn.addEventListener('click', () => moveReviewFocus(1));
 
   if (reviewFilePathsInput) {
+    setupReviewVideoDropTarget(reviewFilePathsDropTarget);
     reviewFilePathsInput.addEventListener('dblclick', (e) => {
       e.preventDefault();
       handleBrowseFiles();
