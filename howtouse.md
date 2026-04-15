@@ -35,9 +35,37 @@ Mac:
 Windows:
 - `C:\Users\HCY\OneDrive\開発\Movie_AutoCut\MovieCut_Local\自動抽出_一括出力.bat` をダブルクリックします。
 
-Mac:
-- `/Users/user/OneDrive/開発/Movie_AutoCut/MovieCut_Local/auto_export_batch.command` を実行します。
-- Finder から開けない場合は、ターミナルで `chmod +x /Users/user/OneDrive/開発/Movie_AutoCut/MovieCut_Local/auto_export_batch.command` を 1 回だけ実行してください。
+
+## Macで軽量化を最初にやるべき:
+
+１：ダウンロード
+２：自動で分割
+jinri_auto_bunktasu_batch.command名のcommandでダブルクリック
+
+保存場所
+/Users/user/Downloads/JINRI_mac/0.元データ/自動分割
+
+保存先
+/Users/user/Downloads/JINRI_mac/1.カット後/分割カット後
+
+３：必要不要
+その後、必要・不要を、選定UIで実施してファイルを軽くする・
+
+
+- /Users/user/Library/CloudStorage/OneDrive-個人用/開発/Movie_AutoCut/MovieCut_Local/Mac/jinri_autocut_batch.command
+  を実行します。
+- Finder から開けない場合は、ターミナルで `chmod +x 
+/Users/user/Library/CloudStorage/OneDrive-個人用/開発/Movie_AutoCut/MovieCut_Local/Mac/jinri_autocut_batch.command`
+ を 1 回だけ実行してください。
+
+＜Donwloadしたら以下に配置すれば軽量化できる＞
+以下に配置したファイルをすべて、デフォルト設定で、映像ビットレートは圧縮なし（そのまま）不要部を除去して、以下の保存し、元のデータを削除
+
+配置場所
+/Users/user/Downloads/JINRI_mac/0.元データ/自動不要部カット
+処理後
+/Users/user/Downloads/JINRI_mac/1.カット後
+
 
 ## 既定フォルダ
 

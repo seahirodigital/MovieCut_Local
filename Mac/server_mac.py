@@ -190,7 +190,7 @@ async def _handle_open_file() -> StarletteResponse:
     """macOS ネイティブの単一ファイル選択ダイアログ"""
     script = '''
         try
-            set videoFile to (choose file with prompt "動画ファイルを選択" of type {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"})
+            set videoFile to (choose file with prompt "動画ファイルを選択" of type {"public.movie", "public.video", "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"})
             return POSIX path of videoFile
         on error number -128
             return ""
@@ -210,7 +210,7 @@ async def _handle_open_files() -> StarletteResponse:
     """macOS ネイティブの複数ファイル選択ダイアログ"""
     script = '''
         try
-            set fileList to (choose file with prompt "判定する動画ファイルを複数選択" of type {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"} with multiple selections allowed)
+            set fileList to (choose file with prompt "判定する動画ファイルを複数選択" of type {"public.movie", "public.video", "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"} with multiple selections allowed)
             set output to ""
             repeat with f in fileList
                 set output to output & POSIX path of f & linefeed

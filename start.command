@@ -6,6 +6,10 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+if [ "$(uname -s)" = "Darwin" ] && [ -x "${SCRIPT_DIR}/Mac/start.command" ]; then
+  exec "${SCRIPT_DIR}/Mac/start.command"
+fi
+
 START_URL="${START_URL:-http://127.0.0.1:8765/}"
 SERVER_PID=""
 
