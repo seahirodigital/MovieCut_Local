@@ -19,6 +19,7 @@ PROJECT_DIR="$(cd "${MAC_DIR}/.." && pwd)"
 LOCAL_STATE_DIR="/Users/user/Library/Application Support/Movie_AutoCut"
 
 START_URL="${START_URL:-http://127.0.0.1:8765/}"
+LISTEN_PORT="${LISTEN_PORT:-8765}"
 SERVER_PID=""
 
 pause_before_exit() {
@@ -39,6 +40,43 @@ cleanup() {
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+stop_existing_movie_autocut_server() {
+  local existing_pids=""
+  local existing_pid=""
+  local existing_command=""
+  local remaining_pids=""
+
+  existing_pids="$(lsof -t -iTCP:${LISTEN_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$existing_pids" ] || return 0
+
+  for existing_pid in $existing_pids; do
+    existing_command="$(ps -p "$existing_pid" -o command= 2>/dev/null || true)"
+    if ! printf "%s" "$existing_command" | grep -Fq "${MAC_DIR}/server_mac.py"; then
+      die "ポート ${LISTEN_PORT} は別のアプリが使用中です。先に停止してください。PID: ${existing_pid}"
+    fi
+  done
+
+  echo "[*] 既存の Movie AutoCut サーバーを停止します..."
+  for existing_pid in $existing_pids; do
+    kill "$existing_pid" >/dev/null 2>&1 || true
+  done
+
+  sleep 1
+  remaining_pids="$(lsof -t -iTCP:${LISTEN_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -n "$remaining_pids" ]; then
+    echo "[WARN] 通常停止できなかったため、強制停止します..."
+    for existing_pid in $remaining_pids; do
+      kill -9 "$existing_pid" >/dev/null 2>&1 || true
+    done
+    sleep 0.5
+  fi
+
+  remaining_pids="$(lsof -t -iTCP:${LISTEN_PORT} -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -n "$remaining_pids" ]; then
+    die "ポート ${LISTEN_PORT} の解放に失敗しました。残存 PID: ${remaining_pids}"
   fi
 }
 
@@ -104,6 +142,8 @@ echo "[*] ダイアログ: osascript (AppleScript)"
 echo "[*] ブラウザは自動で開きます。"
 echo "[*] 終了するには Ctrl+C を押してください。"
 echo
+
+stop_existing_movie_autocut_server
 
 # ===== サーバー起動 =====
 "$VENV_PYTHON" "${MAC_DIR}/server_mac.py" &

@@ -473,7 +473,7 @@ async function handleFilePathDrop(event) {
   }
 
   if (paths.length === 0) {
-    addMessage('動画パスを取得できませんでした。Finderからパス文字列または file:// 形式でドロップしてください。', 'warning');
+    addMessage('動画パスを取得できませんでした。/Users/user/Downloads や /Users/user/Movies、/Users/user/Library/CloudStorage/OneDrive-個人用 配下の動画は自動解決を試します。難しい場合は入力欄へフルパスを貼り付けるか、ダブルクリックで選択してください。', 'warning');
     return;
   }
 

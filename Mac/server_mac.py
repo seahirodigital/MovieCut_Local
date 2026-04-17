@@ -190,15 +190,21 @@ async def _handle_open_file() -> StarletteResponse:
     """macOS ネイティブの単一ファイル選択ダイアログ"""
     script = '''
         try
-            set videoFile to (choose file with prompt "動画ファイルを選択" of type {"public.movie", "public.video", "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"})
+            tell current application to activate
+            set videoFile to (choose file with prompt "動画ファイルを選択" of type {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"})
             return POSIX path of videoFile
-        on error number -128
-            return ""
+        on error errMsg number errNum
+            if errNum is -128 then
+                return ""
+            end if
+            error errMsg number errNum
         end try
     '''
     try:
         returncode, stdout, stderr = await _run_osascript(script)
-        if returncode != 0 or not stdout:
+        if returncode != 0:
+            return _json_response({"success": False, "path": "", "error": stderr or stdout or "動画選択ダイアログを開けませんでした"}, 500)
+        if not stdout:
             return _json_response({"success": False, "path": ""})
         file_path = normalize_dialog_selection(stdout)
         return _json_response({"success": True, "path": file_path})
@@ -210,19 +216,25 @@ async def _handle_open_files() -> StarletteResponse:
     """macOS ネイティブの複数ファイル選択ダイアログ"""
     script = '''
         try
-            set fileList to (choose file with prompt "判定する動画ファイルを複数選択" of type {"public.movie", "public.video", "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"} with multiple selections allowed)
+            tell current application to activate
+            set fileList to (choose file with prompt "判定する動画ファイルを複数選択" of type {"mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "ts", "mts"} with multiple selections allowed)
             set output to ""
             repeat with f in fileList
                 set output to output & POSIX path of f & linefeed
             end repeat
             return output
-        on error number -128
-            return ""
+        on error errMsg number errNum
+            if errNum is -128 then
+                return ""
+            end if
+            error errMsg number errNum
         end try
     '''
     try:
         returncode, stdout, stderr = await _run_osascript(script)
-        if returncode != 0 or not stdout:
+        if returncode != 0:
+            return _json_response({"success": False, "paths": [], "error": stderr or stdout or "複数選択ダイアログを開けませんでした"}, 500)
+        if not stdout:
             return _json_response({"success": False, "paths": []})
         paths = [
             normalize_dialog_selection(p)
@@ -238,15 +250,21 @@ async def _handle_open_directory() -> StarletteResponse:
     """macOS ネイティブのフォルダ選択ダイアログ"""
     script = '''
         try
+            tell current application to activate
             set selectedFolder to (choose folder with prompt "フォルダを選択")
             return POSIX path of selectedFolder
-        on error number -128
-            return ""
+        on error errMsg number errNum
+            if errNum is -128 then
+                return ""
+            end if
+            error errMsg number errNum
         end try
     '''
     try:
         returncode, stdout, stderr = await _run_osascript(script)
-        if returncode != 0 or not stdout:
+        if returncode != 0:
+            return _json_response({"success": False, "path": "", "error": stderr or stdout or "フォルダ選択ダイアログを開けませんでした"}, 500)
+        if not stdout:
             return _json_response({"success": False, "path": ""})
         dir_path = normalize_dialog_selection(stdout)
         return _json_response({"success": True, "path": dir_path})

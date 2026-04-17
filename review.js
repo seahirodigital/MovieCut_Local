@@ -25,6 +25,7 @@ let reviewRejectDirPath = '削除フォルダ';
 let reviewApprovedMovedCount = 0;
 let reviewRejectedMovedCount = 0;
 let reviewUndoInFlight = false;
+let reviewVideoLoadSerial = 0;
 
 function isPlaybackToggleKey(event) {
   return event.code === 'Space'
@@ -234,6 +235,10 @@ function getDroppedVideoFileMetadata(dataTransfer) {
     }));
 }
 
+function isFileDragEvent(event) {
+  return Array.from(event?.dataTransfer?.types || []).includes('Files');
+}
+
 async function resolveDroppedVideoPathsByMetadata(dataTransfer) {
   const fileMetadata = getDroppedVideoFileMetadata(dataTransfer);
   if (fileMetadata.length === 0) {
@@ -307,6 +312,7 @@ async function handleReviewFilePathsDrop(event) {
   event.preventDefault();
   event.stopPropagation();
   setDropTargetActive(event.currentTarget, false);
+  addMessage('ドロップされた動画を確認中です...', 'info');
 
   let paths = [];
   try {
@@ -353,6 +359,14 @@ function setupReviewVideoDropTarget(target) {
   });
 
   target.addEventListener('drop', handleReviewFilePathsDrop, { capture: true });
+}
+
+function bindReviewBrowseGesture(target) {
+  if (!target) return;
+  target.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    handleBrowseFiles();
+  });
 }
 
 function refreshPathsTextarea() {
@@ -1174,7 +1188,8 @@ function loadVideoElement(item, token, preferredTime) {
     videoElement.pause();
     videoElement.addEventListener('loadedmetadata', onLoadedMetadata);
     videoElement.addEventListener('error', onError);
-    videoElement.src = `${API_BASE}/api/video?path=${encodeURIComponent(item.path)}`;
+    reviewVideoLoadSerial += 1;
+    videoElement.src = `${API_BASE}/api/video?path=${encodeURIComponent(item.path)}&reload_token=${reviewVideoLoadSerial}`;
     videoElement.load();
   });
 }
@@ -1282,7 +1297,9 @@ async function loadReviewFiles(paths) {
   }
 
   reviewItems = loadedItems;
-  refreshPathsTextarea();
+  if (reviewItems.length > 0) {
+    refreshPathsTextarea();
+  }
   renderReviewCards();
   updateCurrentReviewInfo();
 
@@ -1298,7 +1315,8 @@ async function loadReviewFiles(paths) {
 
 async function handleBrowseFiles() {
   try {
-    const response = await fetch(`${API_BASE}/api/dialog/open-files`);
+    addMessage('Finder を開いて複数選択ダイアログを表示します...', 'info');
+    const response = await fetch(`${API_BASE}/api/dialog/open-files`, { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok || data.error) {
       throw new Error(data.error || '動画選択ダイアログを開けませんでした');
@@ -1665,6 +1683,10 @@ function init() {
   const reviewFilePathsDropTarget = reviewFilePathsInput
     ? reviewFilePathsInput.closest('.top-control-card') || reviewFilePathsInput
     : null;
+  const interceptBrowserFileDrop = (event) => {
+    if (!isFileDragEvent(event)) return;
+    event.preventDefault();
+  };
 
   if (navMenuBtn) navMenuBtn.addEventListener('click', () => toggleSidePanel());
   if (sidePanelOverlay) sidePanelOverlay.addEventListener('click', () => toggleSidePanel(false));
@@ -1699,11 +1721,18 @@ function init() {
 
   if (reviewFilePathsInput) {
     setupReviewVideoDropTarget(reviewFilePathsDropTarget);
-    reviewFilePathsInput.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      handleBrowseFiles();
-    });
+    if (reviewFilePathsDropTarget !== reviewFilePathsInput) {
+      setupReviewVideoDropTarget(reviewFilePathsInput);
+    }
+    bindReviewBrowseGesture(reviewFilePathsInput);
   }
+  if (reviewFilePathsDropTarget && reviewFilePathsDropTarget !== reviewFilePathsInput) {
+    bindReviewBrowseGesture(reviewFilePathsDropTarget);
+  }
+
+  document.addEventListener('dragenter', interceptBrowserFileDrop, { capture: true });
+  document.addEventListener('dragover', interceptBrowserFileDrop, { capture: true });
+  document.addEventListener('drop', interceptBrowserFileDrop, { capture: true });
 
   videoElement.playbackRate = playbackSpeed;
   videoElement.addEventListener('timeupdate', () => {

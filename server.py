@@ -247,13 +247,25 @@ def normalize_dialog_selection(selected_path: str) -> str:
 
 
 def get_dropped_file_search_roots() -> list[Path]:
+    home_dir = Path.home()
+    one_drive_dir = home_dir / "Library" / "CloudStorage" / "OneDrive-個人用"
+    cloud_storage_dir = home_dir / "Library" / "CloudStorage"
+    user_movie_dir = home_dir / "Movies"
+    user_desktop_dir = home_dir / "Desktop"
+    user_documents_dir = home_dir / "Documents"
+
     roots = [
         get_default_auto_export_source_dir(),
         get_default_auto_export_output_dir(),
         REVIEW_OK_DIR,
         REVIEW_REJECT_DIR,
         get_default_jinri_root(),
-        Path.home() / "Downloads",
+        home_dir / "Downloads",
+        user_movie_dir,
+        user_desktop_dir,
+        user_documents_dir,
+        one_drive_dir,
+        cloud_storage_dir,
     ]
     unique_roots = []
     seen = set()
@@ -269,12 +281,210 @@ def get_dropped_file_search_roots() -> list[Path]:
     return unique_roots
 
 
-def find_dropped_file_matches(file_name: str, file_size: int | None = None) -> list[str]:
+def normalize_dropped_file_last_modified(raw_last_modified: object) -> float | None:
+    try:
+        last_modified = float(raw_last_modified)
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(last_modified) or last_modified <= 0:
+        return None
+
+    # ブラウザの File.lastModified は通常ミリ秒なので、秒へ正規化する。
+    if last_modified >= 10_000_000_000:
+        last_modified /= 1000.0
+
+    return last_modified
+
+
+def is_matching_dropped_file_mtime(candidate_mtime: float, expected_mtime: float | None, tolerance_sec: float = 5.0) -> bool:
+    if expected_mtime is None:
+        return True
+    return abs(candidate_mtime - expected_mtime) <= tolerance_sec
+
+
+def choose_preferred_dropped_file_parent(matches_by_item: list[list[Path]]) -> Path | None:
+    parent_scores: dict[Path, int] = {}
+
+    for matches in matches_by_item:
+        seen_parents = set()
+        for match in matches:
+            parent_dir = match.parent
+            if parent_dir in seen_parents:
+                continue
+            seen_parents.add(parent_dir)
+            parent_scores[parent_dir] = parent_scores.get(parent_dir, 0) + 1
+
+    if not parent_scores:
+        return None
+
+    preferred_parent, score = max(
+        parent_scores.items(),
+        key=lambda item: (item[1], -len(str(item[0])), str(item[0])),
+    )
+    if score < 2:
+        return None
+
+    return preferred_parent
+
+
+def get_finder_selected_file_paths() -> list[Path]:
+    if sys.platform != "darwin":
+        return []
+
+    osascript_path = shutil.which("osascript")
+    if not osascript_path:
+        return []
+
+    script = '''
+        try
+            tell application "Finder"
+                set selectedItems to selection
+                if (count of selectedItems) is 0 then
+                    return ""
+                end if
+
+                set output to ""
+                repeat with selectedItem in selectedItems
+                    set output to output & POSIX path of (selectedItem as alias) & linefeed
+                end repeat
+                return output
+            end tell
+        on error
+            return ""
+        end try
+    '''
+
+    try:
+        result = subprocess.run(
+            [osascript_path, "-e", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3,
+        )
+    except Exception:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    selected_paths = []
+    for line in result.stdout.splitlines():
+        normalized_line = line.strip()
+        if not normalized_line:
+            continue
+        try:
+            candidate = Path(normalized_line).expanduser().resolve()
+        except Exception:
+            continue
+        if candidate.is_file():
+            selected_paths.append(candidate)
+
+    return selected_paths
+
+
+def find_dropped_file_matches_in_finder_selection(
+    file_name: str,
+    finder_selected_paths: list[Path],
+    file_size: int | None = None,
+    last_modified: float | None = None,
+) -> list[Path]:
+    safe_name = Path(str(file_name or "")).name
+    if not safe_name or not finder_selected_paths:
+        return []
+
+    matches: list[Path] = []
+    for candidate in finder_selected_paths:
+        try:
+            if candidate.name != safe_name or not candidate.is_file():
+                continue
+            candidate_stat = candidate.stat()
+            if file_size is not None and file_size >= 0 and candidate_stat.st_size != file_size:
+                continue
+            if not is_matching_dropped_file_mtime(candidate_stat.st_mtime, last_modified):
+                continue
+            matches.append(candidate.resolve())
+        except Exception:
+            continue
+
+    return sorted(set(matches))
+
+
+def find_dropped_file_matches_via_spotlight(
+    file_name: str,
+    file_size: int | None = None,
+    last_modified: float | None = None,
+) -> list[Path]:
+    if sys.platform != "darwin":
+        return []
+
+    mdfind_path = shutil.which("mdfind")
+    if not mdfind_path:
+        return []
+
+    try:
+        result = subprocess.run(
+            [mdfind_path, "-name", file_name],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+        )
+    except Exception:
+        return []
+
+    if result.returncode not in {0, 1}:
+        return []
+
+    matches: list[Path] = []
+    mtime_matched_paths: list[Path] = []
+    for raw_line in result.stdout.splitlines()[:400]:
+        candidate_text = raw_line.strip()
+        if not candidate_text:
+            continue
+
+        candidate = Path(candidate_text).expanduser()
+        try:
+            if not candidate.is_file():
+                continue
+            candidate_stat = candidate.stat()
+            if file_size is not None and file_size >= 0 and candidate_stat.st_size != file_size:
+                continue
+            resolved_candidate = candidate.resolve()
+            matches.append(resolved_candidate)
+            if is_matching_dropped_file_mtime(candidate_stat.st_mtime, last_modified):
+                mtime_matched_paths.append(resolved_candidate)
+        except Exception:
+            continue
+
+    if mtime_matched_paths:
+        matches = mtime_matched_paths
+
+    return sorted(set(matches))
+
+
+def find_dropped_file_matches(
+    file_name: str,
+    file_size: int | None = None,
+    last_modified: float | None = None,
+) -> list[Path]:
     safe_name = Path(str(file_name or "")).name
     if not safe_name:
         return []
 
-    matches = []
+    spotlight_matches = find_dropped_file_matches_via_spotlight(
+        safe_name,
+        file_size=file_size,
+        last_modified=last_modified,
+    )
+    if spotlight_matches:
+        return spotlight_matches
+
+    matches: list[Path] = []
+    mtime_matched_paths: list[Path] = []
     for root in get_dropped_file_search_roots():
         try:
             candidates = root.rglob(safe_name)
@@ -285,11 +495,18 @@ def find_dropped_file_matches(file_name: str, file_size: int | None = None) -> l
             try:
                 if not candidate.is_file():
                     continue
-                if file_size is not None and file_size >= 0 and candidate.stat().st_size != file_size:
+                candidate_stat = candidate.stat()
+                if file_size is not None and file_size >= 0 and candidate_stat.st_size != file_size:
                     continue
-                matches.append(str(candidate.resolve()))
+                resolved_candidate = candidate.resolve()
+                matches.append(resolved_candidate)
+                if is_matching_dropped_file_mtime(candidate_stat.st_mtime, last_modified):
+                    mtime_matched_paths.append(resolved_candidate)
             except Exception:
                 continue
+
+    if mtime_matched_paths:
+        matches = mtime_matched_paths
 
     return sorted(set(matches))
 
@@ -1473,9 +1690,8 @@ async def resolve_dropped_files(file_metadata_json: str = Form(...)):
     if not isinstance(file_metadata, list):
         return JSONResponse({"error": "ドロップファイル情報は配列で指定してください"}, status_code=400)
 
-    resolved_paths = []
-    unresolved = []
-    ambiguous = []
+    finder_selected_paths = get_finder_selected_file_paths()
+    dropped_file_candidates = []
 
     for item in file_metadata[:1000]:
         if not isinstance(item, dict):
@@ -1491,11 +1707,50 @@ async def resolve_dropped_files(file_metadata_json: str = Form(...)):
         except (TypeError, ValueError):
             file_size = None
 
-        matches = find_dropped_file_matches(file_name, file_size)
+        last_modified = normalize_dropped_file_last_modified(item.get("lastModified"))
+        finder_selection_matches = find_dropped_file_matches_in_finder_selection(
+            file_name=file_name,
+            finder_selected_paths=finder_selected_paths,
+            file_size=file_size,
+            last_modified=last_modified,
+        )
+        if finder_selection_matches:
+            matches = finder_selection_matches
+        else:
+            matches = find_dropped_file_matches(
+                file_name,
+                file_size=file_size,
+                last_modified=last_modified,
+            )
+        dropped_file_candidates.append({
+            "name": file_name,
+            "matches": matches,
+        })
+
+    preferred_parent_dir = choose_preferred_dropped_file_parent([
+        item["matches"] for item in dropped_file_candidates
+    ])
+
+    resolved_paths = []
+    unresolved = []
+    ambiguous = []
+
+    for item in dropped_file_candidates:
+        file_name = item["name"]
+        matches = list(item["matches"])
+
+        if preferred_parent_dir is not None and len(matches) > 1:
+            preferred_matches = [match for match in matches if match.parent == preferred_parent_dir]
+            if len(preferred_matches) == 1:
+                matches = preferred_matches
+
         if len(matches) == 1:
-            resolved_paths.append(matches[0])
+            resolved_paths.append(str(matches[0]))
         elif len(matches) > 1:
-            ambiguous.append({"name": file_name, "matches": matches[:10]})
+            ambiguous.append({
+                "name": file_name,
+                "matches": [str(match) for match in matches[:10]],
+            })
         else:
             unresolved.append(file_name)
 
